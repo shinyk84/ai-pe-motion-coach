@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#14532d">
+  <title>AI 체육 동작 코치</title>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/pose.js" crossorigin="anonymous"></script>
+  <style>
+    :root {
+      color-scheme: light;
+      --green-900: #14532d;
+      --green-700: #15803d;
+      --green-100: #dcfce7;
+      --blue-100: #e0f2fe;
+      --ink: #172033;
+      --muted: #64748b;
+      --danger: #dc2626;
+      --warning: #b45309;
+      --surface: #ffffff;
+      --line: #dbe4ee;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Pretendard", "Malgun Gothic", system-ui, sans-serif;
+      color: var(--ink);
+      background: linear-gradient(160deg, #f0fdf4 0%, #eff6ff 55%, #fff 100%);
+    }
+    button, select { font: inherit; }
+    .app { width: min(920px, 100%); margin: 0 auto; padding: 20px 16px 36px; }
+    header { text-align: center; margin-bottom: 16px; }
+    h1 { margin: 0; color: var(--green-900); font-size: clamp(1.65rem, 5vw, 2.4rem); }
+    header p { margin: 8px 0 0; color: var(--muted); }
+
+    .controls, .dashboard, .notice {
+      background: rgba(255, 255, 255, .94);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, .07);
+    }
+    .controls {
+      display: grid;
+      grid-template-columns: 1fr 1fr auto;
+      gap: 12px;
+      padding: 14px;
+      margin-bottom: 14px;
+      align-items: end;
+    }
+    label { display: grid; gap: 6px; color: #475569; font-size: .86rem; font-weight: 700; }
+    select, button {
+      min-height: 46px;
+      border-radius: 10px;
+      border: 1px solid #cbd5e1;
+      padding: 0 12px;
+      background: #fff;
+      color: var(--ink);
+    }
+    button { cursor: pointer; font-weight: 800; }
+    button:focus-visible, select:focus-visible { outline: 3px solid #86efac; outline-offset: 2px; }
+    #cameraButton { min-width: 132px; border: 0; color: #fff; background: var(--green-700); }
+    #cameraButton.stop { background: #b91c1c; }
+
+    .stage {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 4 / 3;
+      overflow: hidden;
+      border-radius: 18px;
+      background: #0f172a;
+      box-shadow: 0 14px 32px rgba(15, 23, 42, .2);
+    }
+    video { display: none; }
+    canvas { display: block; width: 100%; height: 100%; object-fit: cover; }
+    canvas.mirror { transform: scaleX(-1); }
+    .stage-message {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-content: center;
+      gap: 8px;
+      padding: 24px;
+      text-align: center;
+      color: #e2e8f0;
+      background: radial-gradient(circle at 50% 40%, #334155, #0f172a 68%);
+    }
+    .stage-message strong { font-size: 1.25rem; color: #fff; }
+    .stage-message[hidden] { display: none; }
+
+    #feedback {
+      min-height: 62px;
+      display: grid;
+      place-items: center;
+      margin: 14px 0;
+      padding: 12px 16px;
+      border-radius: 14px;
+      background: var(--blue-100);
+      color: #075985;
+      text-align: center;
+      font-size: clamp(1.05rem, 3.8vw, 1.4rem);
+      font-weight: 900;
+    }
+    #feedback.success { color: #166534; background: var(--green-100); }
+    #feedback.warning { color: var(--warning); background: #fef3c7; }
+    #feedback.error { color: var(--danger); background: #fee2e2; }
+
+    .dashboard { display: grid; grid-template-columns: repeat(3, 1fr); overflow: hidden; }
+    .metric { padding: 14px 10px; text-align: center; }
+    .metric + .metric { border-left: 1px solid var(--line); }
+    .metric-title { color: var(--muted); font-size: .78rem; font-weight: 800; }
+    .metric-value { margin-top: 5px; font-size: clamp(1.25rem, 5vw, 2rem); font-weight: 900; }
+
+    .notice { margin-top: 14px; padding: 14px 16px; color: #475569; font-size: .88rem; line-height: 1.55; }
+    .notice strong { color: var(--ink); }
+    .privacy { margin-top: 8px; color: var(--green-900); font-weight: 700; }
+
+    @media (max-width: 640px) {
+      .app { padding: 14px 10px 28px; }
+      .controls { grid-template-columns: 1fr 1fr; }
+      #cameraButton { grid-column: 1 / -1; width: 100%; }
+      .metric { padding-inline: 5px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header>
+      <h1>AI 체육 동작 코치</h1>
+      <p>카메라로 내 움직임을 확인하고 바른 동작을 연습해요.</p>
+    </header>
+
+    <section class="controls" aria-label="동작과 카메라 설정">
+      <label>
+        연습할 동작
+        <select id="movementSelect">
+          <option value="squat">스쿼트</option>
+          <option value="lunge">런지</option>
+          <option value="jumpingJack">팔 벌려 뛰기</option>
+          <option value="armRaise">양팔 올리기</option>
+        </select>
+      </label>
+      <label>
+        사용할 카메라
+        <select id="cameraSelect">
+          <option value="user">전면 카메라</option>
+          <option value="environment">후면 카메라</option>
+        </select>
+      </label>
+      <button id="cameraButton" type="button">카메라 시작</button>
+    </section>
+
+    <section class="stage" aria-label="카메라와 자세 인식 화면">
+      <video id="webcam" autoplay muted playsinline></video>
+      <canvas id="outputCanvas" width="640" height="480"></canvas>
+      <div id="stageMessage" class="stage-message">
+        <strong>준비되었나요?</strong>
+        <span>동작을 선택하고 카메라 시작을 눌러주세요.</span>
+      </div>
+    </section>
+
+    <div id="feedback" role="status" aria-live="polite">동작을 선택하고 카메라를 시작하세요.</div>
+
+    <section class="dashboard" aria-label="동작 측정 결과">
+      <div class="metric">
+        <div class="metric-title">성공 횟수</div>
+        <div id="countValue" class="metric-value">0회</div>
+      </div>
+      <div class="metric">
+        <div id="primaryLabel" class="metric-title">무릎 각도</div>
+        <div id="primaryValue" class="metric-value">-</div>
+      </div>
+      <div class="metric">
+        <div id="secondaryLabel" class="metric-title">인식 상태</div>
+        <div id="secondaryValue" class="metric-value">대기</div>
+      </div>
+    </section>
+
+    <aside class="notice">
+      <strong id="guideTitle">촬영 안내</strong>
+      <div id="cameraGuide">몸 전체가 보이도록 카메라 옆으로 서세요.</div>
+      <div>이 결과는 화면 속 관절 위치를 이용한 수업 보조 정보이며 전문적인 운동·의료 진단이 아닙니다. 통증이 있으면 즉시 멈추고 선생님에게 알려주세요.</div>
+      <div class="privacy">영상은 녹화하거나 서버에 저장하지 않고 현재 브라우저에서만 분석합니다.</div>
+    </aside>
+  </main>
+
+  <script>
+    const video = document.getElementById('webcam');
+    const canvas = document.getElementById('outputCanvas');
+    const ctx = canvas.getContext('2d');
+    const movementSelect = document.getElementById('movementSelect');
+    const cameraSelect = document.getElementById('cameraSelect');
+    const cameraButton = document.getElementById('cameraButton');
+    const stageMessage = document.getElementById('stageMessage');
+    const feedback = document.getElementById('feedback');
+    const countValue = document.getElementById('countValue');
+    const primaryLabel = document.getElementById('primaryLabel');
+    const primaryValue = document.getElementById('primaryValue');
+    const secondaryLabel = document.getElementById('secondaryLabel');
+    const secondaryValue = document.getElementById('secondaryValue');
+    const cameraGuide = document.getElementById('cameraGuide');
+
+    const LEFT = { shoulder: 11, wrist: 15, hip: 23, knee: 25, ankle: 27 };
+    const RIGHT = { shoulder: 12, wrist: 16, hip: 24, knee: 26, ankle: 28 };
+    const SKELETON = [
+      [11, 12], [11, 13], [13, 15], [12, 14], [14, 16],
+      [11, 23], [12, 24], [23, 24], [23, 25], [25, 27],
+      [24, 26], [26, 28]
+    ];
+
+    let camera = null;
+    let running = false;
+    let count = 0;
+    let phase = 'ready';
+    let lastSpokenAt = 0;
+
+    function angle(a, b, c) {
+      const radians = Math.atan2(c.y - b.y, c.x - b.x) - Math.atan2(a.y - b.y, a.x - b.x);
+      let degrees = Math.abs(radians * 180 / Math.PI);
+      if (degrees > 180) degrees = 360 - degrees;
+      return Math.round(degrees);
+    }
+
+    function distance(a, b) {
+      return Math.hypot(a.x - b.x, a.y - b.y);
+    }
+
+    function visible(point, minimum = 0.55) {
+      return point && (point.visibility ?? 1) >= minimum;
+    }
+
+    function sideScore(landmarks, side) {
+      return ['shoulder', 'hip', 'knee', 'ankle']
+        .reduce((sum, joint) => sum + (landmarks[side[joint]]?.visibility ?? 0), 0);
+    }
+
+    function bestSide(landmarks) {
+      return sideScore(landmarks, LEFT) >= sideScore(landmarks, RIGHT) ? LEFT : RIGHT;
+    }
+
+    function setFeedback(message, type = '') {
+      feedback.textContent = message;
+      feedback.className = type;
+    }
+
+    function success() {
+      count += 1;
+      countValue.textContent = `${count}회`;
+      setFeedback(`참 잘했어요! ${count}회 성공!`, 'success');
+      speak(`${count}회 성공`);
+    }
+
+    function speak(text) {
+      if (!('speechSynthesis' in window)) return;
+      const now = Date.now();
+      if (now - lastSpokenAt < 1200) return;
+      lastSpokenAt = now;
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'ko-KR';
+      utterance.rate = 1.05;
+      window.speechSynthesis.speak(utterance);
+    }
+
+    function missing(message = '몸 전체가 보이도록 한 걸음 뒤로 이동해 주세요.') {
+      primaryValue.textContent = '-';
+      secondaryValue.textContent = '확인 중';
+      setFeedback(message, 'warning');
+    }
+
+    function evaluateSquat(lm) {
+      const s = bestSide(lm);
+      const points = [s.shoulder, s.hip, s.knee, s.ankle].map(index => lm[index]);
+      if (!points.every(point => visible(point))) return missing();
+      const knee = angle(lm[s.hip], lm[s.knee], lm[s.ankle]);
+      const torsoTilt = Math.abs(Math.atan2(lm[s.shoulder].x - lm[s.hip].x, lm[s.hip].y - lm[s.shoulder].y) * 180 / Math.PI);
+      primaryValue.textContent = `${knee}°`;
+      secondaryValue.textContent = torsoTilt > 42 ? '상체 확인' : '좋음';
+
+      if (torsoTilt > 42) return setFeedback('가슴을 조금 더 들어 보세요.', 'warning');
+      if (knee < 65) return setFeedback('조금만 올라와 목표 범위에서 멈춰 보세요.', 'warning');
+      if (knee >= 75 && knee <= 115) {
+        phase = 'down';
+        return setFeedback('좋아요! 발바닥으로 바닥을 밀며 일어나세요.', 'success');
+      }
+      if (knee > 155) {
+        if (phase === 'down') success();
+        else setFeedback('천천히 무릎을 굽혀 보세요.');
+        phase = 'ready';
+        return;
+      }
+      setFeedback('천천히 조금 더 내려가 보세요.');
+    }
+
+    function evaluateLunge(lm) {
+      const required = [23, 24, 25, 26, 27, 28];
+      if (!required.every(index => visible(lm[index], 0.45))) return missing('두 다리와 발목이 모두 보이게 서 주세요.');
+      const leftKnee = angle(lm[23], lm[25], lm[27]);
+      const rightKnee = angle(lm[24], lm[26], lm[28]);
+      const frontKnee = Math.min(leftKnee, rightKnee);
+      primaryValue.textContent = `${frontKnee}°`;
+      secondaryValue.textContent = '두 다리 인식';
+
+      if (frontKnee >= 75 && frontKnee <= 120) {
+        phase = 'down';
+        return setFeedback('좋아요! 중심을 유지하며 일어나세요.', 'success');
+      }
+      if (frontKnee > 150) {
+        if (phase === 'down') success();
+        else setFeedback('한 발 앞으로 내딛고 천천히 내려가세요.');
+        phase = 'ready';
+        return;
+      }
+      if (frontKnee < 65) return setFeedback('조금만 올라와 균형을 잡아 보세요.', 'warning');
+      setFeedback('상체를 세우고 앞무릎을 조금 더 굽혀 보세요.');
+    }
+
+    function evaluateJumpingJack(lm) {
+      const required = [11, 12, 15, 16, 23, 24, 27, 28];
+      if (!required.every(index => visible(lm[index], 0.45))) return missing();
+      const leftArm = angle(lm[23], lm[11], lm[15]);
+      const rightArm = angle(lm[24], lm[12], lm[16]);
+      const armAverage = Math.round((leftArm + rightArm) / 2);
+      const shoulderWidth = Math.max(distance(lm[11], lm[12]), 0.01);
+      const legSpread = distance(lm[27], lm[28]) / shoulderWidth;
+      const opened = armAverage > 140 && legSpread > 1.55;
+      const closed = armAverage < 55 && legSpread < 1.15;
+      primaryValue.textContent = `${armAverage}°`;
+      secondaryValue.textContent = opened ? '활짝' : closed ? '모음' : '움직이는 중';
+
+      if (opened) {
+        phase = 'open';
+        return setFeedback('팔과 다리를 활짝 폈어요! 다시 모아 보세요.', 'success');
+      }
+      if (closed) {
+        if (phase === 'open') success();
+        else setFeedback('팔과 다리를 동시에 벌려 보세요.');
+        phase = 'ready';
+        return;
+      }
+      setFeedback('팔은 위로, 다리는 옆으로 함께 움직여 보세요.');
+    }
+
+    function evaluateArmRaise(lm) {
+      const required = [11, 12, 15, 16, 23, 24];
+      if (!required.every(index => visible(lm[index], 0.45))) return missing('양쪽 어깨와 손목이 모두 보이게 서 주세요.');
+      const leftArm = angle(lm[23], lm[11], lm[15]);
+      const rightArm = angle(lm[24], lm[12], lm[16]);
+      const average = Math.round((leftArm + rightArm) / 2);
+      const difference = Math.abs(leftArm - rightArm);
+      primaryValue.textContent = `${average}°`;
+      secondaryValue.textContent = difference < 22 ? '균형 좋음' : '높이 확인';
+
+      if (difference >= 22) return setFeedback('양팔의 높이를 비슷하게 맞춰 보세요.', 'warning');
+      if (average > 150) {
+        phase = 'up';
+        return setFeedback('양팔을 높이 잘 올렸어요! 천천히 내리세요.', 'success');
+      }
+      if (average < 45) {
+        if (phase === 'up') success();
+        else setFeedback('두 팔을 나란히 머리 위로 올려 보세요.');
+        phase = 'ready';
+        return;
+      }
+      setFeedback('양팔을 같은 속도로 조금 더 올려 보세요.');
+    }
+
+    const profiles = {
+      squat: {
+        primary: '무릎 각도', secondary: '상체 상태',
+        guide: '몸 전체가 보이도록 카메라 옆으로 서세요.', evaluate: evaluateSquat
+      },
+      lunge: {
+        primary: '앞무릎 각도', secondary: '인식 상태',
+        guide: '두 다리가 모두 보이도록 카메라 옆으로 서세요.', evaluate: evaluateLunge
+      },
+      jumpingJack: {
+        primary: '팔 벌림 각도', secondary: '동작 상태',
+        guide: '팔을 올려도 손이 잘리지 않도록 카메라 정면에서 멀리 서세요.', evaluate: evaluateJumpingJack
+      },
+      armRaise: {
+        primary: '평균 팔 각도', secondary: '좌우 균형',
+        guide: '양손과 골반이 모두 보이도록 카메라 정면에 서세요.', evaluate: evaluateArmRaise
+      }
+    };
+
+    function resetExercise() {
+      count = 0;
+      phase = 'ready';
+      countValue.textContent = '0회';
+      primaryValue.textContent = '-';
+      secondaryValue.textContent = running ? '확인 중' : '대기';
+      const profile = profiles[movementSelect.value];
+      primaryLabel.textContent = profile.primary;
+      secondaryLabel.textContent = profile.secondary;
+      cameraGuide.textContent = profile.guide;
+      setFeedback(running ? profile.guide : '동작을 선택하고 카메라를 시작하세요.');
+    }
+
+    function drawPose(landmarks) {
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = '#22c55e';
+      SKELETON.forEach(([from, to]) => {
+        const a = landmarks[from];
+        const b = landmarks[to];
+        if (!visible(a, 0.35) || !visible(b, 0.35)) return;
+        ctx.beginPath();
+        ctx.moveTo(a.x * canvas.width, a.y * canvas.height);
+        ctx.lineTo(b.x * canvas.width, b.y * canvas.height);
+        ctx.stroke();
+      });
+      landmarks.forEach(point => {
+        if (!visible(point, 0.55)) return;
+        ctx.beginPath();
+        ctx.arc(point.x * canvas.width, point.y * canvas.height, 4, 0, Math.PI * 2);
+        ctx.fillStyle = '#f8fafc';
+        ctx.fill();
+        ctx.strokeStyle = '#16a34a';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      });
+    }
+
+    function onResults(results) {
+      ctx.save();
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+      if (results.poseLandmarks) {
+        drawPose(results.poseLandmarks);
+        profiles[movementSelect.value].evaluate(results.poseLandmarks);
+      } else {
+        missing('사람을 찾고 있어요. 몸 전체가 화면에 보이게 서 주세요.');
+      }
+      ctx.restore();
+    }
+
+    const pose = new Pose({
+      locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/${file}`
+    });
+    pose.setOptions({
+      modelComplexity: 1,
+      smoothLandmarks: true,
+      enableSegmentation: false,
+      minDetectionConfidence: 0.6,
+      minTrackingConfidence: 0.6
+    });
+    pose.onResults(onResults);
+
+    async function startCamera() {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setFeedback('이 브라우저에서는 카메라를 사용할 수 없습니다. HTTPS 주소인지 확인해 주세요.', 'error');
+        return;
+      }
+      try {
+        camera = new Camera(video, {
+          onFrame: async () => pose.send({ image: video }),
+          width: 640,
+          height: 480,
+          facingMode: cameraSelect.value
+        });
+        await camera.start();
+        running = true;
+        canvas.classList.toggle('mirror', cameraSelect.value === 'user');
+        stageMessage.hidden = true;
+        cameraButton.textContent = '카메라 종료';
+        cameraButton.classList.add('stop');
+        resetExercise();
+      } catch (error) {
+        console.error(error);
+        const denied = error?.name === 'NotAllowedError';
+        setFeedback(denied
+          ? '카메라 권한이 거부되었습니다. 브라우저 설정에서 카메라를 허용해 주세요.'
+          : '카메라를 시작하지 못했습니다. 다른 앱이 카메라를 사용 중인지 확인해 주세요.', 'error');
+      }
+    }
+
+    async function stopCamera() {
+      if (camera?.stop) camera.stop();
+      video.srcObject?.getTracks().forEach(track => track.stop());
+      window.speechSynthesis?.cancel();
+      camera = null;
+      running = false;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      stageMessage.hidden = false;
+      cameraButton.textContent = '카메라 시작';
+      cameraButton.classList.remove('stop');
+      resetExercise();
+    }
+
+    cameraButton.addEventListener('click', () => running ? stopCamera() : startCamera());
+    movementSelect.addEventListener('change', resetExercise);
+    cameraSelect.addEventListener('change', async () => {
+      if (!running) return;
+      await stopCamera();
+      await startCamera();
+    });
+    window.addEventListener('pagehide', () => {
+      video.srcObject?.getTracks().forEach(track => track.stop());
+    });
+
+    resetExercise();
+  </script>
+</body>
+</html>
