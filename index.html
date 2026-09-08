@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#14532d">
   <title>AI 체육 동작 코치</title>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3/camera_utils.js" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/pose.js" crossorigin="anonymous"></script>
   <style>
     :root {
@@ -23,20 +22,28 @@
     }
 
     * { box-sizing: border-box; }
+    html, body { max-width: 100%; overflow-x: hidden; }
     body {
       margin: 0;
       min-height: 100vh;
+      min-height: 100dvh;
       font-family: "Pretendard", "Malgun Gothic", system-ui, sans-serif;
       color: var(--ink);
       background: linear-gradient(160deg, #f0fdf4 0%, #eff6ff 55%, #fff 100%);
     }
     button, select { font: inherit; }
-    .app { width: min(920px, 100%); margin: 0 auto; padding: 20px 16px 36px; }
+    .app {
+      width: min(920px, 100%);
+      margin: 0 auto;
+      padding: 20px 16px 36px;
+      padding-left: max(16px, env(safe-area-inset-left));
+      padding-right: max(16px, env(safe-area-inset-right));
+    }
     header { text-align: center; margin-bottom: 16px; }
     h1 { margin: 0; color: var(--green-900); font-size: clamp(1.65rem, 5vw, 2.4rem); }
     header p { margin: 8px 0 0; color: var(--muted); }
 
-    .controls, .dashboard, .notice {
+    .controls, .guide-card, .dashboard, .notice {
       background: rgba(255, 255, 255, .94);
       border: 1px solid var(--line);
       border-radius: 16px;
@@ -44,7 +51,7 @@
     }
     .controls {
       display: grid;
-      grid-template-columns: 1fr 1fr auto;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
       gap: 12px;
       padding: 14px;
       margin-bottom: 14px;
@@ -53,7 +60,7 @@
     label { display: grid; gap: 6px; color: #475569; font-size: .86rem; font-weight: 700; }
     .controls > *, .metric { min-width: 0; }
     select, button {
-      min-height: 46px;
+      min-height: 44px;
       border-radius: 10px;
       border: 1px solid #cbd5e1;
       padding: 0 12px;
@@ -62,21 +69,57 @@
     }
     select { width: 100%; }
     button { cursor: pointer; font-weight: 800; }
-    button:focus-visible, select:focus-visible { outline: 3px solid #86efac; outline-offset: 2px; }
-    #cameraButton { min-width: 132px; border: 0; color: #fff; background: var(--green-700); }
+    button:focus-visible, select:focus-visible, .toggle-field:focus-within {
+      outline: 3px solid #86efac; outline-offset: 2px;
+    }
+    #cameraButton {
+      grid-column: 1 / -1;
+      min-height: 48px;
+      border: 0;
+      color: #fff;
+      background: var(--green-700);
+    }
     #cameraButton.stop { background: #b91c1c; }
+    .ghost-button { background: #fff; border: 1px solid #cbd5e1; color: var(--ink); font-weight: 700; }
 
+    .toggle-field {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 44px;
+      background: #fff;
+      border: 1px solid #cbd5e1;
+      border-radius: 10px;
+      padding: 0 12px;
+      font-weight: 700;
+      color: #475569;
+      font-size: .86rem;
+      cursor: pointer;
+    }
+    .toggle-field input { width: 20px; height: 20px; flex: none; }
+
+    .guide-card { padding: 14px 16px; margin-bottom: 14px; }
+    .guide-card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+    .guide-card-head strong { font-size: 1.05rem; color: var(--green-900); }
+    .badge {
+      background: var(--blue-100); color: #075985; font-weight: 800; font-size: .78rem;
+      padding: 4px 10px; border-radius: 999px; white-space: nowrap;
+    }
+    #guideDistanceHint { margin: 8px 0; color: #475569; font-size: .9rem; }
+    #guideInstructions { margin: 0 0 10px; padding-left: 20px; color: var(--ink); font-size: .92rem; line-height: 1.6; }
+    #guideInstructions li { margin-bottom: 2px; }
+
+    .stage-frame { display: flex; justify-content: center; }
     .stage {
       position: relative;
-      width: 100%;
-      aspect-ratio: 4 / 3;
       overflow: hidden;
       border-radius: 18px;
       background: #0f172a;
       box-shadow: 0 14px 32px rgba(15, 23, 42, .2);
+      max-width: 100%;
     }
     video { display: none; }
-    canvas { display: block; width: 100%; height: 100%; object-fit: cover; }
+    canvas { display: block; width: 100%; height: 100%; }
     canvas.mirror { transform: scaleX(-1); }
     .stage-message {
       position: absolute;
@@ -91,6 +134,83 @@
     }
     .stage-message strong { font-size: 1.25rem; color: #fff; }
     .stage-message[hidden] { display: none; }
+
+    .countdown-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      padding-top: max(20px, env(safe-area-inset-top));
+      padding-bottom: max(20px, env(safe-area-inset-bottom));
+      background: rgba(15, 23, 42, .68);
+      color: #fff;
+      text-align: center;
+    }
+    .countdown-overlay[hidden] { display: none; }
+    .countdown-inner { display: grid; gap: 10px; max-width: 92%; }
+    .countdown-movement { font-size: clamp(1.3rem, 5vw, 2rem); font-weight: 900; }
+    .countdown-guide { font-size: clamp(1rem, 3.6vw, 1.3rem); color: #dbeafe; }
+    .countdown-status { min-height: 1.4em; font-size: clamp(.95rem, 3.2vw, 1.15rem); font-weight: 800; color: #fde68a; }
+    .countdown-status.warning { color: #fca5a5; }
+    .countdown-status.success { color: #bbf7d0; }
+    .countdown-number {
+      font-size: clamp(3rem, 16vw, 6rem);
+      font-weight: 900;
+      line-height: 1;
+      margin: 6px 0;
+    }
+    .countdown-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+    .countdown-actions button {
+      min-height: 46px;
+      padding: 0 18px;
+      border-radius: 999px;
+      border: 0;
+      font-weight: 800;
+      background: var(--green-700);
+      color: #fff;
+    }
+    .countdown-actions button.secondary { background: rgba(255, 255, 255, .16); color: #fff; }
+
+    .distance-message {
+      position: absolute;
+      left: 50%;
+      bottom: max(16px, env(safe-area-inset-bottom));
+      transform: translateX(-50%);
+      z-index: 4;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      max-width: 92%;
+      padding: 12px 18px;
+      border-radius: 16px;
+      background: rgba(15, 23, 42, .78);
+      color: #fff;
+      font-weight: 900;
+      font-size: clamp(1.15rem, 5vw, 1.9rem);
+      line-height: 1.25;
+      text-align: left;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, .35);
+    }
+    .distance-message[hidden] { display: none; }
+    .distance-message.success { background: rgba(20, 83, 45, .88); }
+    .distance-message.warning, .distance-message.error { background: rgba(120, 53, 15, .88); }
+    .distance-icon { font-size: 1.3em; flex: none; }
+    .distance-count {
+      position: absolute;
+      top: max(14px, env(safe-area-inset-top));
+      right: max(14px, env(safe-area-inset-right));
+      z-index: 4;
+      background: rgba(15, 23, 42, .72);
+      color: #fff;
+      font-weight: 900;
+      font-size: clamp(1.05rem, 4.5vw, 1.6rem);
+      padding: 8px 14px;
+      border-radius: 999px;
+    }
+    .distance-count[hidden] { display: none; }
 
     #feedback {
       min-height: 62px;
@@ -109,11 +229,14 @@
     #feedback.warning { color: var(--warning); background: #fef3c7; }
     #feedback.error { color: var(--danger); background: #fee2e2; }
 
-    .dashboard { display: grid; grid-template-columns: repeat(3, 1fr); overflow: hidden; }
+    .dashboard { display: grid; grid-template-columns: repeat(3, 1fr); overflow: hidden; transition: none; }
     .metric { padding: 14px 10px; text-align: center; }
     .metric + .metric { border-left: 1px solid var(--line); }
     .metric-title { color: var(--muted); font-size: .78rem; font-weight: 800; }
     .metric-value { margin-top: 5px; overflow-wrap: anywhere; font-size: clamp(1.15rem, 5vw, 2rem); font-weight: 900; }
+    .dashboard.compact .metric { padding: 6px 6px; }
+    .dashboard.compact .metric-value { font-size: clamp(.85rem, 3vw, 1.1rem); }
+    .dashboard.compact .metric-title { font-size: .68rem; }
 
     .notice { margin-top: 14px; padding: 14px 16px; color: #475569; font-size: .88rem; line-height: 1.55; }
     .notice strong { color: var(--ink); }
@@ -121,9 +244,12 @@
 
     @media (max-width: 640px) {
       .app { padding: 14px 10px 28px; }
-      .controls { grid-template-columns: 1fr 1fr; }
       #cameraButton { grid-column: 1 / -1; width: 100%; }
       .metric { padding-inline: 5px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      * { transition: none !important; animation: none !important; }
     }
   </style>
 </head>
@@ -151,17 +277,63 @@
           <option value="environment">후면 카메라</option>
         </select>
       </label>
+      <label>
+        준비 시간
+        <select id="prepTimeSelect">
+          <option value="5">5초</option>
+          <option value="10" selected>10초</option>
+          <option value="15">15초</option>
+        </select>
+      </label>
+      <label class="toggle-field">
+        <input type="checkbox" id="voiceToggle" checked>
+        <span>음성 안내</span>
+      </label>
+      <label class="toggle-field">
+        <input type="checkbox" id="distanceModeToggle">
+        <span>원거리 모드</span>
+      </label>
+      <button id="voiceTestButton" type="button" class="ghost-button">음성 시험</button>
       <button id="cameraButton" type="button">카메라 시작</button>
     </section>
 
-    <section class="stage" aria-label="카메라와 자세 인식 화면">
-      <video id="webcam" autoplay muted playsinline></video>
-      <canvas id="outputCanvas" width="640" height="480"></canvas>
-      <div id="stageMessage" class="stage-message">
-        <strong>준비되었나요?</strong>
-        <span>동작을 선택하고 카메라 시작을 눌러주세요.</span>
+    <section class="guide-card" aria-label="선택한 동작 안내">
+      <div class="guide-card-head">
+        <strong id="guideMovementName">스쿼트</strong>
+        <span id="guideView" class="badge">측면 촬영</span>
       </div>
+      <p id="guideDistanceHint">카메라 옆에서 2~3걸음 떨어져 몸 전체가 보이게 서요.</p>
+      <ol id="guideInstructions"></ol>
+      <button id="speakGuideButton" type="button" class="ghost-button">설명 듣기</button>
     </section>
+
+    <div class="stage-frame">
+      <section class="stage" id="stage" aria-label="카메라와 자세 인식 화면">
+        <video id="webcam" autoplay muted playsinline></video>
+        <canvas id="outputCanvas" width="640" height="480"></canvas>
+        <div id="stageMessage" class="stage-message">
+          <strong>준비되었나요?</strong>
+          <span>동작과 준비 시간을 선택하고 카메라 시작을 눌러주세요.</span>
+        </div>
+        <div id="distanceMessage" class="distance-message" hidden aria-hidden="true">
+          <span id="distanceIcon" class="distance-icon">ℹ️</span>
+          <span id="distanceText">동작을 준비해요</span>
+        </div>
+        <div id="distanceCount" class="distance-count" hidden aria-hidden="true">0회</div>
+        <div id="countdownOverlay" class="countdown-overlay" hidden aria-hidden="true">
+          <div class="countdown-inner">
+            <div id="countdownMovement" class="countdown-movement">스쿼트</div>
+            <div id="countdownGuide" class="countdown-guide">촬영 안내</div>
+            <div id="countdownStatus" class="countdown-status"></div>
+            <div id="countdownNumber" class="countdown-number">10</div>
+            <div class="countdown-actions">
+              <button id="skipCountdownButton" type="button">바로 시작</button>
+              <button id="cancelCountdownButton" type="button" class="secondary">취소</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
 
     <div id="feedback" role="status" aria-live="polite">동작을 선택하고 카메라를 시작하세요.</div>
 
@@ -192,8 +364,15 @@
     const video = document.getElementById('webcam');
     const canvas = document.getElementById('outputCanvas');
     const ctx = canvas.getContext('2d');
+    const stage = document.getElementById('stage');
+    const stageFrame = document.querySelector('.stage-frame');
     const movementSelect = document.getElementById('movementSelect');
     const cameraSelect = document.getElementById('cameraSelect');
+    const prepTimeSelect = document.getElementById('prepTimeSelect');
+    const voiceToggle = document.getElementById('voiceToggle');
+    const distanceModeToggle = document.getElementById('distanceModeToggle');
+    const voiceTestButton = document.getElementById('voiceTestButton');
+    const speakGuideButton = document.getElementById('speakGuideButton');
     const cameraButton = document.getElementById('cameraButton');
     const stageMessage = document.getElementById('stageMessage');
     const feedback = document.getElementById('feedback');
@@ -203,6 +382,24 @@
     const secondaryLabel = document.getElementById('secondaryLabel');
     const secondaryValue = document.getElementById('secondaryValue');
     const cameraGuide = document.getElementById('cameraGuide');
+    const guideMovementName = document.getElementById('guideMovementName');
+    const guideView = document.getElementById('guideView');
+    const guideDistanceHint = document.getElementById('guideDistanceHint');
+    const guideInstructions = document.getElementById('guideInstructions');
+    const dashboard = document.querySelector('.dashboard');
+
+    const countdownOverlay = document.getElementById('countdownOverlay');
+    const countdownMovement = document.getElementById('countdownMovement');
+    const countdownGuide = document.getElementById('countdownGuide');
+    const countdownStatus = document.getElementById('countdownStatus');
+    const countdownNumber = document.getElementById('countdownNumber');
+    const skipCountdownButton = document.getElementById('skipCountdownButton');
+    const cancelCountdownButton = document.getElementById('cancelCountdownButton');
+
+    const distanceMessageEl = document.getElementById('distanceMessage');
+    const distanceIcon = document.getElementById('distanceIcon');
+    const distanceText = document.getElementById('distanceText');
+    const distanceCount = document.getElementById('distanceCount');
 
     const LEFT = { shoulder: 11, wrist: 15, hip: 23, knee: 25, ankle: 27 };
     const RIGHT = { shoulder: 12, wrist: 16, hip: 24, knee: 26, ankle: 28 };
@@ -212,12 +409,42 @@
       [24, 26], [26, 28]
     ];
 
-    let camera = null;
-    let running = false;
+    // --- 상태 ---
+    const settings = {
+      movement: 'squat',
+      facingMode: 'user',
+      prepSeconds: 10,
+      voiceOn: true,
+      distanceMode: false
+    };
+
+    let appState = 'idle'; // 'idle' | 'countdown' | 'practice'
+    let currentStream = null;
+    let videoAspect = 4 / 3;
+    let rafId = null;
+    let sending = false;
+    let countdownTimer = null;
+    let countdownAdvanceTimeout = null;
+    let countdownRemaining = 0;
+
     let count = 0;
     let phase = 'ready';
-    let lastSpokenAt = 0;
 
+    const PRIORITY = { SYSTEM: 100, SUCCESS: 90, WARNING: 70, TARGET: 55, INFO: 40 };
+    const HOLD_SUCCESS_MS = 2000;
+    const HOLD_DEFAULT_MS = 1500;
+    const SPEECH_GAP_MS = 2500;
+
+    const feedbackState = {
+      key: null,
+      message: '',
+      priority: -1,
+      shownAt: 0,
+      lastSpokenMessage: '',
+      lastSpokenAt: 0
+    };
+
+    // --- 공통 계산 ---
     function angle(a, b, c) {
       const radians = Math.atan2(c.y - b.y, c.x - b.x) - Math.atan2(a.y - b.y, a.x - b.x);
       let degrees = Math.abs(radians * 180 / Math.PI);
@@ -242,63 +469,120 @@
       return sideScore(landmarks, LEFT) >= sideScore(landmarks, RIGHT) ? LEFT : RIGHT;
     }
 
-    function setFeedback(message, type = '') {
+    // --- 피드백 안정화 ---
+    function holdDuration(priority) {
+      return priority === PRIORITY.SUCCESS ? HOLD_SUCCESS_MS : HOLD_DEFAULT_MS;
+    }
+
+    function renderFeedback(message, type) {
       feedback.textContent = message;
-      feedback.className = type;
+      feedback.className = type || '';
+      countdownStatus.textContent = message;
+      countdownStatus.className = 'countdown-status' + (type ? ' ' + type : '');
+      distanceText.textContent = message;
+      distanceMessageEl.className = 'distance-message' + (type ? ' ' + type : '');
+      distanceIcon.textContent = type === 'success' ? '✅' : (type === 'warning' || type === 'error') ? '⚠️' : 'ℹ️';
     }
 
-    function success() {
-      count += 1;
-      countValue.textContent = `${count}회`;
-      setFeedback(`참 잘했어요! ${count}회 성공!`, 'success');
-      speak(`${count}회 성공`);
-    }
-
-    function speak(text) {
-      if (!('speechSynthesis' in window)) return;
+    function requestFeedback(key, message, type, priority, opts = {}) {
       const now = Date.now();
-      if (now - lastSpokenAt < 1200) return;
-      lastSpokenAt = now;
+      const sameMessage = feedbackState.key === key && feedbackState.message === message;
+      if (sameMessage) return;
+
+      const elapsed = now - feedbackState.shownAt;
+      const currentHold = holdDuration(feedbackState.priority);
+      const canOverride = priority > feedbackState.priority || elapsed >= currentHold;
+      if (!canOverride) return;
+
+      feedbackState.key = key;
+      feedbackState.message = message;
+      feedbackState.priority = priority;
+      feedbackState.shownAt = now;
+      renderFeedback(message, type);
+
+      if (opts.speak !== false) maybeSpeak(message, opts.forceSpeak);
+    }
+
+    function resetFeedbackState() {
+      feedbackState.key = null;
+      feedbackState.message = '';
+      feedbackState.priority = -1;
+      feedbackState.shownAt = 0;
+      feedbackState.lastSpokenAt = 0;
+    }
+
+    function maybeSpeak(message, force = false) {
+      if (!settings.voiceOn || !('speechSynthesis' in window)) return;
+      const now = Date.now();
+      if (!force) {
+        if (message === feedbackState.lastSpokenMessage) return;
+        if (now - feedbackState.lastSpokenAt < SPEECH_GAP_MS) return;
+      }
+      feedbackState.lastSpokenMessage = message;
+      feedbackState.lastSpokenAt = now;
       window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
+      const utterance = new SpeechSynthesisUtterance(message);
       utterance.lang = 'ko-KR';
-      utterance.rate = 1.05;
+      utterance.rate = 1.03;
       window.speechSynthesis.speak(utterance);
     }
 
-    function missing(message = '몸 전체가 보이도록 한 걸음 뒤로 이동해 주세요.') {
-      primaryValue.textContent = '-';
-      secondaryValue.textContent = '확인 중';
-      setFeedback(message, 'warning');
+    // 설정 화면의 "음성 시험"/"설명 듣기" 버튼처럼 사용자가 직접 요청한 발화는
+    // 음성 안내 on/off나 발화 간격 제한과 무관하게 즉시 들려준다.
+    function speakRaw(text) {
+      if (!('speechSynthesis' in window)) return;
+      feedbackState.lastSpokenMessage = text;
+      feedbackState.lastSpokenAt = Date.now();
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'ko-KR';
+      utterance.rate = 1.03;
+      window.speechSynthesis.speak(utterance);
     }
 
+    // 카운트다운 전용 발화. 마지막 3초는 1초 간격으로 말해야 하므로
+    // 일반 피드백의 2.5초 간격 제한을 적용하지 않는다.
+    function speakCountdown(text) {
+      if (!settings.voiceOn) return;
+      speakRaw(text);
+    }
+
+    // --- 동작 판정 ---
     function evaluateSquat(lm) {
       const s = bestSide(lm);
       const points = [s.shoulder, s.hip, s.knee, s.ankle].map(index => lm[index]);
-      if (!points.every(point => visible(point))) return missing();
+      if (!points.every(point => visible(point))) {
+        primaryValue.textContent = '-';
+        secondaryValue.textContent = '확인 중';
+        return requestFeedback('squat-missing', '무릎과 엉덩이가 잘 보이게 옆으로 서요.', 'warning', PRIORITY.WARNING);
+      }
       const knee = angle(lm[s.hip], lm[s.knee], lm[s.ankle]);
       const torsoTilt = Math.abs(Math.atan2(lm[s.shoulder].x - lm[s.hip].x, lm[s.hip].y - lm[s.shoulder].y) * 180 / Math.PI);
       primaryValue.textContent = `${knee}°`;
       secondaryValue.textContent = torsoTilt > 42 ? '상체 확인' : '좋음';
 
-      if (torsoTilt > 42) return setFeedback('가슴을 조금 더 들어 보세요.', 'warning');
-      if (knee < 65) return setFeedback('조금만 올라와 목표 범위에서 멈춰 보세요.', 'warning');
+      if (torsoTilt > 42) return requestFeedback('squat-torso', '가슴을 조금 더 들어요.', 'warning', PRIORITY.WARNING);
+      if (knee < 65) return requestFeedback('squat-toolow', '조금만 올라와 목표 범위에서 멈춰요.', 'warning', PRIORITY.WARNING);
       if (knee >= 75 && knee <= 115) {
         phase = 'down';
-        return setFeedback('좋아요! 발바닥으로 바닥을 밀며 일어나세요.', 'success');
+        return requestFeedback('squat-target', '좋아요! 발바닥으로 밀며 일어나요.', '', PRIORITY.TARGET);
       }
       if (knee > 155) {
         if (phase === 'down') success();
-        else setFeedback('천천히 무릎을 굽혀 보세요.');
+        else requestFeedback('squat-ready', '천천히 무릎을 굽혀 보세요.', '', PRIORITY.INFO);
         phase = 'ready';
         return;
       }
-      setFeedback('천천히 조금 더 내려가 보세요.');
+      requestFeedback('squat-down', '조금 더 내려가요.', '', PRIORITY.INFO);
     }
 
     function evaluateLunge(lm) {
       const required = [23, 24, 25, 26, 27, 28];
-      if (!required.every(index => visible(lm[index], 0.45))) return missing('두 다리와 발목이 모두 보이게 서 주세요.');
+      if (!required.every(index => visible(lm[index], 0.45))) {
+        primaryValue.textContent = '-';
+        secondaryValue.textContent = '확인 중';
+        return requestFeedback('lunge-missing', '두 다리와 발목이 모두 보이게 서요.', 'warning', PRIORITY.WARNING);
+      }
       const leftKnee = angle(lm[23], lm[25], lm[27]);
       const rightKnee = angle(lm[24], lm[26], lm[28]);
       const frontKnee = Math.min(leftKnee, rightKnee);
@@ -307,21 +591,25 @@
 
       if (frontKnee >= 75 && frontKnee <= 120) {
         phase = 'down';
-        return setFeedback('좋아요! 중심을 유지하며 일어나세요.', 'success');
+        return requestFeedback('lunge-target', '좋아요! 중심을 유지하며 일어나요.', '', PRIORITY.TARGET);
       }
       if (frontKnee > 150) {
         if (phase === 'down') success();
-        else setFeedback('한 발 앞으로 내딛고 천천히 내려가세요.');
+        else requestFeedback('lunge-ready', '한 발 앞으로 내딛고 천천히 내려가요.', '', PRIORITY.INFO);
         phase = 'ready';
         return;
       }
-      if (frontKnee < 65) return setFeedback('조금만 올라와 균형을 잡아 보세요.', 'warning');
-      setFeedback('상체를 세우고 앞무릎을 조금 더 굽혀 보세요.');
+      if (frontKnee < 65) return requestFeedback('lunge-toolow', '조금만 올라와 균형을 잡아요.', 'warning', PRIORITY.WARNING);
+      requestFeedback('lunge-down', '상체를 세우고 앞무릎을 조금 더 굽혀요.', '', PRIORITY.INFO);
     }
 
     function evaluateJumpingJack(lm) {
       const required = [11, 12, 15, 16, 23, 24, 27, 28];
-      if (!required.every(index => visible(lm[index], 0.45))) return missing();
+      if (!required.every(index => visible(lm[index], 0.45))) {
+        primaryValue.textContent = '-';
+        secondaryValue.textContent = '확인 중';
+        return requestFeedback('jack-missing', '팔다리가 모두 보이게 카메라에서 떨어져 서요.', 'warning', PRIORITY.WARNING);
+      }
       const leftArm = angle(lm[23], lm[11], lm[15]);
       const rightArm = angle(lm[24], lm[12], lm[16]);
       const armAverage = Math.round((leftArm + rightArm) / 2);
@@ -334,20 +622,24 @@
 
       if (opened) {
         phase = 'open';
-        return setFeedback('팔과 다리를 활짝 폈어요! 다시 모아 보세요.', 'success');
+        return requestFeedback('jack-target', '팔과 다리를 활짝 폈어요! 다시 모아요.', '', PRIORITY.TARGET);
       }
       if (closed) {
         if (phase === 'open') success();
-        else setFeedback('팔과 다리를 동시에 벌려 보세요.');
+        else requestFeedback('jack-ready', '팔과 다리를 동시에 벌려 보세요.', '', PRIORITY.INFO);
         phase = 'ready';
         return;
       }
-      setFeedback('팔은 위로, 다리는 옆으로 함께 움직여 보세요.');
+      requestFeedback('jack-move', '팔은 위로, 다리는 옆으로 함께 움직여요.', '', PRIORITY.INFO);
     }
 
     function evaluateArmRaise(lm) {
       const required = [11, 12, 15, 16, 23, 24];
-      if (!required.every(index => visible(lm[index], 0.45))) return missing('양쪽 어깨와 손목이 모두 보이게 서 주세요.');
+      if (!required.every(index => visible(lm[index], 0.45))) {
+        primaryValue.textContent = '-';
+        secondaryValue.textContent = '확인 중';
+        return requestFeedback('arm-missing', '양쪽 어깨와 손목이 모두 보이게 서요.', 'warning', PRIORITY.WARNING);
+      }
       const leftArm = angle(lm[23], lm[11], lm[15]);
       const rightArm = angle(lm[24], lm[12], lm[16]);
       const average = Math.round((leftArm + rightArm) / 2);
@@ -355,50 +647,147 @@
       primaryValue.textContent = `${average}°`;
       secondaryValue.textContent = difference < 22 ? '균형 좋음' : '높이 확인';
 
-      if (difference >= 22) return setFeedback('양팔의 높이를 비슷하게 맞춰 보세요.', 'warning');
+      if (difference >= 22) return requestFeedback('arm-balance', '양팔 높이를 맞춰요.', 'warning', PRIORITY.WARNING);
       if (average > 150) {
         phase = 'up';
-        return setFeedback('양팔을 높이 잘 올렸어요! 천천히 내리세요.', 'success');
+        return requestFeedback('arm-target', '양팔을 높이 잘 올렸어요! 천천히 내려요.', '', PRIORITY.TARGET);
       }
       if (average < 45) {
         if (phase === 'up') success();
-        else setFeedback('두 팔을 나란히 머리 위로 올려 보세요.');
+        else requestFeedback('arm-ready', '두 팔을 나란히 머리 위로 올려 보세요.', '', PRIORITY.INFO);
         phase = 'ready';
         return;
       }
-      setFeedback('양팔을 같은 속도로 조금 더 올려 보세요.');
+      requestFeedback('arm-raise', '양팔을 같은 속도로 조금 더 올려요.', '', PRIORITY.INFO);
     }
 
+    function success() {
+      count += 1;
+      countValue.textContent = `${count}회`;
+      distanceCount.textContent = `${count}회`;
+      requestFeedback('success', `좋아요! ${count}회 성공`, 'success', PRIORITY.SUCCESS, { forceSpeak: true });
+    }
+
+    // --- 동작 설정 ---
     const profiles = {
       squat: {
+        name: '스쿼트',
+        view: 'side',
+        guide: '몸 전체가 보이도록 카메라 옆으로 서세요.',
+        distanceHint: '카메라 옆에서 2~3걸음 떨어져 몸 전체가 보이게 서요.',
+        instructions: ['두 발을 어깨너비로 벌려 서요.', '엉덩이를 뒤로 빼며 천천히 앉아요.', '무릎을 펴며 천천히 일어나요.'],
         primary: '무릎 각도', secondary: '상체 상태',
-        guide: '몸 전체가 보이도록 카메라 옆으로 서세요.', evaluate: evaluateSquat
+        evaluate: evaluateSquat
       },
       lunge: {
+        name: '런지',
+        view: 'side',
+        guide: '두 다리가 모두 보이도록 카메라 옆으로 서세요.',
+        distanceHint: '카메라 옆에서 두 다리가 모두 보이도록 충분히 떨어져 서요.',
+        instructions: ['한 발을 크게 앞으로 내딛어요.', '두 무릎이 90도 정도 되게 앉아요.', '앞발로 밀며 제자리로 돌아와요.'],
         primary: '앞무릎 각도', secondary: '인식 상태',
-        guide: '두 다리가 모두 보이도록 카메라 옆으로 서세요.', evaluate: evaluateLunge
+        evaluate: evaluateLunge
       },
       jumpingJack: {
+        name: '팔 벌려 뛰기',
+        view: 'front',
+        guide: '팔을 올려도 손이 잘리지 않도록 카메라 정면에서 멀리 서세요.',
+        distanceHint: '카메라 정면에서 팔다리가 잘리지 않게 충분히 떨어져 서요.',
+        instructions: ['두 발을 모으고 팔은 옆에 내려요.', '팔은 위로, 다리는 옆으로 동시에 벌려요.', '다시 팔다리를 모으며 제자리로 돌아와요.'],
         primary: '팔 벌림 각도', secondary: '동작 상태',
-        guide: '팔을 올려도 손이 잘리지 않도록 카메라 정면에서 멀리 서세요.', evaluate: evaluateJumpingJack
+        evaluate: evaluateJumpingJack
       },
       armRaise: {
+        name: '양팔 올리기',
+        view: 'front',
+        guide: '양손과 골반이 모두 보이도록 카메라 정면에 서세요.',
+        distanceHint: '카메라 정면에서 양손과 골반이 모두 보이게 서요.',
+        instructions: ['두 팔을 몸 옆에 내려요.', '두 팔을 나란히 머리 위까지 올려요.', '천천히 두 팔을 다시 내려요.'],
         primary: '평균 팔 각도', secondary: '좌우 균형',
-        guide: '양손과 골반이 모두 보이도록 카메라 정면에 서세요.', evaluate: evaluateArmRaise
+        evaluate: evaluateArmRaise
       }
     };
 
-    function resetExercise() {
-      count = 0;
-      phase = 'ready';
-      countValue.textContent = '0회';
-      primaryValue.textContent = '-';
-      secondaryValue.textContent = running ? '확인 중' : '대기';
-      const profile = profiles[movementSelect.value];
+    function currentProfile() {
+      return profiles[settings.movement];
+    }
+
+    // --- 몸 전체 인식 안내 ---
+    function assessBodyVisibility(lm) {
+      const nose = lm[0];
+      const leftAnkle = lm[27];
+      const rightAnkle = lm[28];
+      const coreJoints = [11, 12, 23, 24];
+      const coreVisible = coreJoints.every(index => visible(lm[index], 0.5));
+      if (!coreVisible) {
+        return { status: 'low', ok: false, message: '주요 관절이 잘 안 보여요. 밝은 곳에서 조금 더 가까이 와 보세요.' };
+      }
+      const margin = 0.04;
+      const headCropped = !visible(nose, 0.4) || nose.y < margin;
+      const ankleCropped = !visible(leftAnkle, 0.35) || !visible(rightAnkle, 0.35)
+        || leftAnkle.y > 1 - margin || rightAnkle.y > 1 - margin;
+      if (headCropped || ankleCropped) {
+        return { status: 'cropped', ok: false, message: '머리나 발이 화면 밖에 있어요. 한 걸음 뒤로 가 주세요.' };
+      }
+      return { status: 'ok', ok: true, message: '몸 전체가 잘 보여요. 준비됐어요!' };
+    }
+
+    function updateVisibilityHint(assessment) {
+      if (assessment.status === 'none') {
+        secondaryValue.textContent = '탐색 중';
+        primaryValue.textContent = '-';
+        return requestFeedback('vis-none', assessment.message, 'warning', PRIORITY.WARNING);
+      }
+      if (assessment.status === 'low') {
+        secondaryValue.textContent = '신뢰도 낮음';
+        primaryValue.textContent = '-';
+        return requestFeedback('vis-low', assessment.message, 'warning', PRIORITY.WARNING);
+      }
+      if (assessment.status === 'cropped') {
+        secondaryValue.textContent = '화면 밖';
+        primaryValue.textContent = '-';
+        return requestFeedback('vis-cropped', assessment.message, 'warning', PRIORITY.WARNING);
+      }
+      if (feedbackState.key && feedbackState.key.startsWith('vis-')) {
+        requestFeedback('vis-ok', assessment.message, 'success', PRIORITY.INFO);
+      }
+    }
+
+    // --- 화면 갱신 ---
+    function updateDashboardLabels() {
+      const profile = currentProfile();
       primaryLabel.textContent = profile.primary;
       secondaryLabel.textContent = profile.secondary;
       cameraGuide.textContent = profile.guide;
-      setFeedback(running ? profile.guide : '동작을 선택하고 카메라를 시작하세요.');
+    }
+
+    function updateGuideCard() {
+      const profile = currentProfile();
+      guideMovementName.textContent = profile.name;
+      guideView.textContent = profile.view === 'front' ? '정면 촬영' : '측면 촬영';
+      guideDistanceHint.textContent = profile.distanceHint;
+      guideInstructions.innerHTML = '';
+      profile.instructions.forEach(step => {
+        const li = document.createElement('li');
+        li.textContent = step;
+        guideInstructions.appendChild(li);
+      });
+    }
+
+    function resetRepState() {
+      count = 0;
+      phase = 'ready';
+      countValue.textContent = '0회';
+      distanceCount.textContent = '0회';
+      primaryValue.textContent = '-';
+      secondaryValue.textContent = appState === 'idle' ? '대기' : '확인 중';
+    }
+
+    function updateDistanceVisibility() {
+      const active = settings.distanceMode && appState === 'practice';
+      distanceMessageEl.hidden = !active;
+      distanceCount.hidden = !active;
+      dashboard.classList.toggle('compact', active);
     }
 
     function drawPose(landmarks) {
@@ -428,14 +817,19 @@
     }
 
     function onResults(results) {
+      if (appState === 'idle') return;
       ctx.save();
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
       if (results.poseLandmarks) {
         drawPose(results.poseLandmarks);
-        profiles[movementSelect.value].evaluate(results.poseLandmarks);
+        const assessment = assessBodyVisibility(results.poseLandmarks);
+        updateVisibilityHint(assessment);
+        if (appState === 'practice' && assessment.ok) {
+          currentProfile().evaluate(results.poseLandmarks);
+        }
       } else {
-        missing('사람을 찾고 있어요. 몸 전체가 화면에 보이게 서 주세요.');
+        updateVisibilityHint({ status: 'none', message: '사람을 찾고 있어요. 몸 전체가 화면에 보이게 서 주세요.' });
       }
       ctx.restore();
     }
@@ -452,59 +846,256 @@
     });
     pose.onResults(onResults);
 
-    async function startCamera() {
-      if (!navigator.mediaDevices?.getUserMedia) {
-        setFeedback('이 브라우저에서는 카메라를 사용할 수 없습니다. HTTPS 주소인지 확인해 주세요.', 'error');
-        return;
+    // --- 화면 비율 유지 ---
+    function layoutStage() {
+      const hostWidth = stageFrame.clientWidth || window.innerWidth;
+      const maxWidth = Math.min(hostWidth, 920);
+      const viewportHeight = window.innerHeight || 800;
+      const maxHeight = Math.min(viewportHeight * 0.68, 760);
+      let width = maxWidth;
+      let height = width / videoAspect;
+      if (height > maxHeight) {
+        height = maxHeight;
+        width = height * videoAspect;
       }
-      try {
-        camera = new Camera(video, {
-          onFrame: async () => pose.send({ image: video }),
-          width: 640,
-          height: 480,
-          facingMode: cameraSelect.value
-        });
-        await camera.start();
-        running = true;
-        canvas.classList.toggle('mirror', cameraSelect.value === 'user');
-        stageMessage.hidden = true;
-        cameraButton.textContent = '카메라 종료';
-        cameraButton.classList.add('stop');
-        resetExercise();
-      } catch (error) {
-        console.error(error);
-        const denied = error?.name === 'NotAllowedError';
-        setFeedback(denied
-          ? '카메라 권한이 거부되었습니다. 브라우저 설정에서 카메라를 허용해 주세요.'
-          : '카메라를 시작하지 못했습니다. 다른 앱이 카메라를 사용 중인지 확인해 주세요.', 'error');
-      }
+      width = Math.max(width, 220);
+      height = Math.max(height, 165);
+      stage.style.width = `${width}px`;
+      stage.style.height = `${height}px`;
     }
 
-    async function stopCamera() {
-      if (camera?.stop) camera.stop();
-      video.srcObject?.getTracks().forEach(track => track.stop());
+    // --- 카메라 생명주기 ---
+    function waitForVideoReady() {
+      return new Promise((resolve, reject) => {
+        if (video.readyState >= 2 && video.videoWidth) {
+          resolve();
+          return;
+        }
+        const onReady = () => { cleanup(); resolve(); };
+        const onError = () => { cleanup(); reject(new Error('video-error')); };
+        function cleanup() {
+          video.removeEventListener('loadedmetadata', onReady);
+          video.removeEventListener('error', onError);
+        }
+        video.addEventListener('loadedmetadata', onReady);
+        video.addEventListener('error', onError);
+      });
+    }
+
+    async function openCamera() {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        const error = new Error('unsupported');
+        error.name = 'NotSupportedError';
+        throw error;
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: settings.facingMode },
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        },
+        audio: false
+      });
+      currentStream = stream;
+      video.srcObject = stream;
+      await waitForVideoReady();
+      await video.play().catch(() => {});
+      videoAspect = (video.videoWidth && video.videoHeight) ? video.videoWidth / video.videoHeight : 4 / 3;
+      canvas.width = video.videoWidth || 640;
+      canvas.height = video.videoHeight || 480;
+      canvas.classList.toggle('mirror', settings.facingMode === 'user');
+      layoutStage();
+      stageMessage.hidden = true;
+      startFrameLoop();
+    }
+
+    function startFrameLoop() {
+      if (rafId) cancelAnimationFrame(rafId);
+      function tick() {
+        if (appState === 'idle') return;
+        if (!sending && video.readyState >= 2) {
+          sending = true;
+          pose.send({ image: video }).catch(() => {}).finally(() => { sending = false; });
+        }
+        rafId = requestAnimationFrame(tick);
+      }
+      rafId = requestAnimationFrame(tick);
+    }
+
+    async function stopEverything() {
+      clearCountdownTimers();
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = null;
+      currentStream?.getTracks().forEach(track => track.stop());
+      currentStream = null;
+      video.srcObject = null;
+      appState = 'idle';
       window.speechSynthesis?.cancel();
-      camera = null;
-      running = false;
+      resetFeedbackState();
+      resetRepState();
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       stageMessage.hidden = false;
+      countdownOverlay.hidden = true;
+      updateDistanceVisibility();
       cameraButton.textContent = '카메라 시작';
       cameraButton.classList.remove('stop');
-      resetExercise();
+      updateDashboardLabels();
+      renderFeedback('동작을 선택하고 카메라를 시작하세요.', '');
     }
 
-    cameraButton.addEventListener('click', () => running ? stopCamera() : startCamera());
-    movementSelect.addEventListener('change', resetExercise);
-    cameraSelect.addEventListener('change', async () => {
-      if (!running) return;
-      await stopCamera();
-      await startCamera();
-    });
-    window.addEventListener('pagehide', () => {
-      video.srcObject?.getTracks().forEach(track => track.stop());
+    function handleCameraError(error) {
+      console.error(error);
+      appState = 'idle';
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = null;
+      currentStream?.getTracks().forEach(track => track.stop());
+      currentStream = null;
+      stageMessage.hidden = false;
+      countdownOverlay.hidden = true;
+      cameraButton.textContent = '카메라 시작';
+      cameraButton.classList.remove('stop');
+      resetFeedbackState();
+      const denied = error?.name === 'NotAllowedError';
+      const message = denied
+        ? '카메라 권한이 거부되었습니다. 브라우저 설정에서 카메라를 허용해 주세요.'
+        : '카메라를 시작하지 못했습니다. 다른 앱이 카메라를 사용 중인지 확인해 주세요.';
+      requestFeedback('camera-error', message, 'error', PRIORITY.SYSTEM, { forceSpeak: true });
+    }
+
+    // --- 준비 카운트다운 ---
+    function clearCountdownTimers() {
+      if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+      if (countdownAdvanceTimeout) { clearTimeout(countdownAdvanceTimeout); countdownAdvanceTimeout = null; }
+    }
+
+    function updateCountdownIntro() {
+      const profile = currentProfile();
+      countdownMovement.textContent = profile.name;
+      countdownGuide.textContent = profile.guide;
+    }
+
+    function startCountdown() {
+      appState = 'countdown';
+      resetRepState();
+      resetFeedbackState();
+      const profile = currentProfile();
+      countdownOverlay.hidden = false;
+      updateCountdownIntro();
+      countdownRemaining = settings.prepSeconds;
+      countdownNumber.textContent = String(countdownRemaining);
+      speakCountdown(`${profile.name} 준비. ${profile.guide}`);
+      updateDistanceVisibility();
+      countdownTimer = setInterval(tickCountdown, 1000);
+    }
+
+    function tickCountdown() {
+      countdownRemaining -= 1;
+      if (countdownRemaining <= 0) {
+        clearCountdownTimers();
+        countdownNumber.textContent = '시작';
+        speakCountdown('시작');
+        countdownAdvanceTimeout = setTimeout(beginPractice, 500);
+        return;
+      }
+      countdownNumber.textContent = String(countdownRemaining);
+      if (countdownRemaining <= 3) speakCountdown(String(countdownRemaining));
+    }
+
+    function skipCountdown() {
+      clearCountdownTimers();
+      beginPractice();
+    }
+
+    function cancelCountdown() {
+      clearCountdownTimers();
+      stopEverything();
+    }
+
+    function beginPractice() {
+      appState = 'practice';
+      resetRepState();
+      resetFeedbackState();
+      countdownOverlay.hidden = true;
+      updateDistanceVisibility();
+      requestFeedback('practice-start', currentProfile().guide, '', PRIORITY.INFO, { speak: false });
+    }
+
+    // --- 시작/종료 ---
+    async function handleStartClick() {
+      if (appState !== 'idle') {
+        await stopEverything();
+        return;
+      }
+      cameraButton.disabled = true;
+      resetFeedbackState();
+      try {
+        await openCamera();
+        cameraButton.textContent = '연습 종료';
+        cameraButton.classList.add('stop');
+        startCountdown();
+      } catch (error) {
+        handleCameraError(error);
+      } finally {
+        cameraButton.disabled = false;
+      }
+    }
+
+    // --- 이벤트 ---
+    cameraButton.addEventListener('click', handleStartClick);
+    skipCountdownButton.addEventListener('click', skipCountdown);
+    cancelCountdownButton.addEventListener('click', cancelCountdown);
+
+    movementSelect.addEventListener('change', () => {
+      settings.movement = movementSelect.value;
+      updateDashboardLabels();
+      updateGuideCard();
+      if (appState === 'countdown') updateCountdownIntro();
+      if (appState !== 'idle') {
+        resetRepState();
+        resetFeedbackState();
+      }
     });
 
-    resetExercise();
+    cameraSelect.addEventListener('change', async () => {
+      settings.facingMode = cameraSelect.value;
+      if (appState === 'idle') return;
+      await stopEverything();
+      await handleStartClick();
+    });
+
+    prepTimeSelect.addEventListener('change', () => {
+      settings.prepSeconds = parseInt(prepTimeSelect.value, 10) || 10;
+    });
+
+    voiceToggle.addEventListener('change', () => {
+      settings.voiceOn = voiceToggle.checked;
+      if (!settings.voiceOn) window.speechSynthesis?.cancel();
+    });
+
+    distanceModeToggle.addEventListener('change', () => {
+      settings.distanceMode = distanceModeToggle.checked;
+      updateDistanceVisibility();
+    });
+
+    voiceTestButton.addEventListener('click', () => {
+      speakRaw('음성 안내를 확인합니다. 잘 들리면 준비된 거예요.');
+    });
+
+    speakGuideButton.addEventListener('click', () => {
+      const profile = currentProfile();
+      speakRaw(`${profile.guide} ${profile.instructions.join(' ')}`);
+    });
+
+    window.addEventListener('resize', layoutStage);
+    window.addEventListener('orientationchange', () => setTimeout(layoutStage, 300));
+    window.addEventListener('pagehide', () => {
+      currentStream?.getTracks().forEach(track => track.stop());
+    });
+
+    updateDashboardLabels();
+    updateGuideCard();
+    resetRepState();
+    layoutStage();
   </script>
 </body>
 </html>
