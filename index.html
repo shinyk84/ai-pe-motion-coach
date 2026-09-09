@@ -523,30 +523,44 @@
       return cachedVoices.find(v => v.lang && v.lang.toLowerCase().startsWith('ko')) || null;
     }
 
-    // 실제 발화 실행. Chrome/Edge 등 일부 브라우저는 speechSynthesis가
-    // 아직 "준비"되지 않은 상태에서 cancel() 직후 곧바로 speak()를 호출하면
-    // 아무 반응 없이 조용히 무시하는 경우가 있다. 이를 피하기 위해
-    // 꼭 필요할 때만 cancel()하고, speak() 호출을 한 틱 미룬다.
+    // 실제 발화 실행. iOS Safari 등 모바일 브라우저는 사용자 탭(gesture)과
+    // 동기적으로 이어지지 않는 speak() 호출은 조용히 무시하므로,
+    // setTimeout 등으로 지연하지 않고 항상 같은 실행 흐름에서 바로 호출한다.
     function speakUtterance(text) {
       if (!('speechSynthesis' in window)) return false;
       const synth = window.speechSynthesis;
-      setTimeout(() => {
-        try {
-          const utterance = new SpeechSynthesisUtterance(text);
-          utterance.lang = 'ko-KR';
-          utterance.rate = 1.03;
-          const koreanVoice = pickKoreanVoice();
-          if (koreanVoice) {
-            try { utterance.voice = koreanVoice; } catch (voiceError) { /* 음성 지정 실패 시 기본 음성으로 계속 진행 */ }
-          }
-          if (synth.speaking || synth.pending) synth.cancel();
-          synth.speak(utterance);
-        } catch (error) {
-          console.error('음성 안내 재생 중 오류:', error);
+      try {
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'ko-KR';
+        utterance.rate = 1.03;
+        const koreanVoice = pickKoreanVoice();
+        if (koreanVoice) {
+          try { utterance.voice = koreanVoice; } catch (voiceError) { /* 음성 지정 실패 시 기본 음성으로 계속 진행 */ }
         }
-      }, 0);
+        if (synth.speaking || synth.pending) synth.cancel();
+        synth.speak(utterance);
+      } catch (error) {
+        console.error('음성 안내 재생 중 오류:', error);
+      }
       return true;
     }
+
+    // iOS Safari는 그 페이지에서 처음 speak()가 실제 사용자 탭과 동기적으로
+    // 호출되어야만 음성 엔진이 "잠금 해제"되고, 이후에는 타이머·콜백에서
+    // 호출해도 소리가 난다. 카운트다운·자세 피드백처럼 탭 이후 비동기로
+    // 발화되는 음성이 아이폰에서 안 들리는 문제를 막기 위해, 페이지에서
+    // 처음 일어나는 클릭/터치 때 무음에 가까운 발화로 미리 잠금을 해제한다.
+    let speechUnlocked = false;
+    function unlockSpeech() {
+      if (speechUnlocked || !('speechSynthesis' in window)) return;
+      speechUnlocked = true;
+      try {
+        const unlock = new SpeechSynthesisUtterance(' ');
+        unlock.volume = 0;
+        window.speechSynthesis.speak(unlock);
+      } catch (error) { /* 무시: 잠금 해제 실패해도 이후 speak() 시도는 계속된다 */ }
+    }
+    document.addEventListener('pointerdown', unlockSpeech, { once: true, capture: true });
 
     function maybeSpeak(message, force = false) {
       if (!settings.voiceOn) return;
