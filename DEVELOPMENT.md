@@ -1,6 +1,6 @@
 # 개발 인수인계
 
-최종 기록일: 2026-09-09 (1차 개선)
+최종 기록일: 2026-09-09 (2차 개선: PC·교실 화면 연동)
 
 ## 현재 상태
 
@@ -9,11 +9,12 @@
 - 기본 브랜치: `main`
 - 배포: GitHub Pages, `main` 브랜치의 `/` 경로
 - 앱 형태: 빌드 과정이 없는 단일 정적 HTML 웹앱
-- 외부 라이브러리: jsDelivr에서 불러오는 MediaPipe Pose 0.5
+- 외부 라이브러리: jsDelivr에서 불러오는 MediaPipe Pose 0.5, `jsqr` 1.4.0, `qrious` 4.0.2
   - 1차 개선에서 MediaPipe Camera Utils 0.3 의존성을 제거했습니다. 카메라 시작/정지, 프레임 전송 루프를 `getUserMedia` + `requestAnimationFrame`으로 직접 구현하여 캡처 해상도(`video.videoWidth/videoHeight`)를 그대로 읽고 강제 리사이즈 없이 캔버스 크기를 맞출 수 있게 했습니다.
+  - 2차 개선에서 PC·교실 화면 연동(WebRTC)을 위해 `jsqr`(QR 스캔), `qrious`(QR 생성)를 추가했습니다. 시그널링 서버는 두지 않았습니다.
 - 원본 스쿼트 예제는 로컬에만 보관하며 `.gitignore`로 배포에서 제외
 
-현재 제공하는 동작은 스쿼트, 런지, 팔 벌려 뛰기, 양팔 올리기입니다. 전면·후면 카메라를 선택할 수 있고, 동작별 피드백과 성공 횟수를 표시합니다. 영상 저장 또는 서버 업로드 기능은 없습니다.
+현재 제공하는 동작은 스쿼트, 런지, 팔 벌려 뛰기, 양팔 올리기입니다. 전면·후면 카메라를 선택할 수 있고, 동작별 피드백과 성공 횟수를 표시합니다. 영상 저장 또는 서버 업로드 기능은 없습니다. PC·교실 화면에 스마트폰 카메라를 실시간으로 띄우는 기능(아래 참고)도 서버 없이 P2P로 동작합니다.
 
 ## 1차 개선 (2026-09-09) 요약
 
@@ -24,6 +25,12 @@
 - 관절 visibility를 이용한 몸 전체 인식 안내 (사람 없음/화면 밖 잘림/신뢰도 낮음/정상)
 - `profiles`에 `name`, `view`, `instructions`, `distanceHint` 추가, 동작별 안내 카드와 "설명 듣기" 버튼 제공
 - 모바일 터치 영역(44px 이상), safe-area inset, prefers-reduced-motion 대응
+
+## 2차 개선 (2026-09-09) 요약
+
+- PC/교실 화면(카메라 없는 기기)에 스마트폰 카메라 화면을 실시간으로 띄우는 기능 추가
+- 시그널링 서버 없이 QR코드(PC→폰) + 수동 복사(폰→PC)로 WebRTC 연결 (자세한 설계는 아래 "PC·교실 화면 연동" 참고)
+- 성공 횟수·자세 피드백도 데이터채널로 PC 화면에 실시간 표시 (원거리 모드와 같은 스타일)
 
 ## 파일 구성
 
@@ -39,7 +46,7 @@ ai-pe-motion-coach/
 
 별도 프레임워크 없이 HTML, CSS, JavaScript가 한 파일에 들어 있습니다.
 
-- 화면: 설정(동작/카메라/준비 시간/음성/원거리 모드), 안내 카드, 캔버스(카운트다운·원거리 오버레이 포함), 피드백, 측정 카드
+- 화면: 모드 전환(`#practiceView`/`#receiveView`), 설정(동작/카메라/준비 시간/음성/원거리 모드), 안내 카드, 캔버스(카운트다운·원거리 오버레이 포함), 피드백, 측정 카드, PC 연동 카드
 - 공통 계산: `angle`, `distance`, `visible`, `bestSide`
 - 동작 판정: `evaluateSquat`, `evaluateLunge`, `evaluateJumpingJack`, `evaluateArmRaise`
 - 동작 설정: `profiles`
@@ -48,6 +55,9 @@ ai-pe-motion-coach/
 - 카메라 생명주기: `openCamera`, `startFrameLoop`, `stopEverything`, `handleCameraError`
 - 준비 카운트다운: `startCountdown`, `tickCountdown`, `skipCountdown`, `cancelCountdown`, `beginPractice`
 - 횟수 판정: `phase`가 목표 자세에 도달한 뒤 시작 자세로 돌아올 때 1회 증가 (단, `appState === 'practice'`일 때만 판정)
+- PC·교실 화면 연동(보내는 쪽/스마트폰): `startPcScan`, `scanForOfferQr`, `connectToPc`, `disconnectFromPc`, `broadcastFeedback`
+- PC·교실 화면 연동(받는 쪽/PC): `startReceive`, `completeReceiveConnection`, `resetReceive`, `handleReceivedFeedback`, `layoutReceiveStage`
+- PC·교실 화면 연동 공통: `RTC_CONFIG`, `waitForIceGatheringComplete`, `restrictToVp8`
 
 MediaPipe 관절 번호는 코드의 `LEFT`, `RIGHT` 객체에 모아 두었습니다. 인식 가능성은 각 관절의 `visibility` 값으로 확인합니다.
 
@@ -100,6 +110,47 @@ profiles.squat = {
 
 새 동작을 추가할 때는 위 필드를 모두 채우고, `movementSelect`에 `<option>`을 추가한 뒤 `evaluate새동작`을 등록합니다(아래 "새 동작 추가 방법" 참고).
 
+## PC·교실 화면 연동 (WebRTC, 2차 개선)
+
+교실 PC/프로젝터에는 카메라가 없다는 요청에 따라, 스마트폰 카메라 화면(관절선 포함)을 같은 와이파이의 PC 화면으로 실시간 전송하는 기능을 추가했습니다. 시그널링 서버 없이 QR코드 + 사람이 직접 복사하는 텍스트 코드만으로 WebRTC 연결을 맺습니다.
+
+### 왜 "QR은 한쪽 방향만" 쓰는가
+
+PC에는 카메라가 없다는 게 이 기능의 전제이므로, QR코드는 **PC가 화면에 보여주고 스마트폰이 카메라로 스캔하는 방향으로만** 쓸 수 있습니다(반대 방향은 PC가 스캔할 카메라가 없어 불가능). 그래서 연결 순서가 다음과 같이 정해집니다.
+
+1. PC(받는 쪽, `receiveView`)가 먼저 `RTCPeerConnection`을 만들고 `createOffer()`로 제안(offer)을 생성해 **QR코드로 보여줍니다.**
+2. 스마트폰(보내는 쪽, `practiceView`)이 이미 켜져 있는 연습용 카메라 프레임을 `jsQR`로 스캔해 offer를 읽고, `createAnswer()`로 응답(answer)을 만듭니다.
+3. 이 응답은 QR로 되돌려줄 방법이 없으므로(PC에 카메라가 없음), 화면에 텍스트로 보여주고 **사람이 직접 복사해서** PC의 입력창에 붙여넣습니다. 두 기기 사이에 글자를 옮기는 구체적인 방법(카카오톡 나에게 보내기, 문자, 이메일 등)은 앱이 관여하지 않고 사용자에게 맡깁니다.
+
+두 방향 모두 "vanilla ICE"(트리클 없이, `icegatheringstate === 'complete'`가 될 때까지 기다린 뒤 완성된 SDP 하나만 주고받는 방식)를 사용합니다. `waitForIceGatheringComplete(pc)`가 이를 담당합니다. 덕분에 QR 한 장 + 텍스트 붙여넣기 한 번으로 협상이 끝나고, ICE 후보를 여러 번 주고받을 필요가 없습니다.
+
+### QR코드 용량 문제와 코덱 제한
+
+QR코드는 물리적으로 최대 약 2953바이트(버전 40, 오류 정정 L)까지만 담을 수 있습니다. 그런데 Chrome이 기본으로 제안하는 영상 offer SDP는 VP8/VP9/H264(여러 프로필)/AV1/rtx/fec 등 지원하는 모든 코덱을 나열하면서, 여기에 데이터채널(SCTP)용 `m=application` 섹션까지 더해져 QR 용량을 넘어버립니다(직접 측정 시 3000바이트 이상, QR 인코딩이 조용히 잘려서 안 보이는 실패로 이어짐).
+
+이를 해결하기 위해 `restrictToVp8(pc)`가 `RTCRtpSender.getCapabilities('video')`로 얻은 코덱 목록에서 VP8(+rtx)만 남기고 `transceiver.setCodecPreferences()`로 강제합니다. PC(오퍼러)는 `createOffer()` 전에, 스마트폰(앤서러)은 `setRemoteDescription(offer)` 이후 `createAnswer()` 전에 각각 호출합니다. 이 코덱 제한만으로 실측 SDP가 약 2200~2400바이트까지 줄어 QR 한 장과 붙여넣기 텍스트칸 모두에 안전하게 들어갑니다. 데이터채널은 그대로 유지했습니다(코덱 제한만으로 충분히 줄었기 때문).
+
+새 코덱 지원이 필요해 SDP가 다시 커진다면, 이 코덱 제한을 더 좁히거나(예: rtx 제외), 데이터채널을 별도 재협상으로 분리하는 방안을 검토해야 합니다.
+
+### 영상은 어떻게 전달되나
+
+스마트폰은 별도로 영상을 다시 인코딩하지 않고, 연습 화면에 이미 그리고 있는 `outputCanvas`(영상 + 관절선이 매 프레임 그려진 캔버스)를 그대로 `canvas.captureStream(24)`로 캡처해 비디오 트랙으로 보냅니다. 그래서 PC 쪽은 자세 판정을 다시 계산할 필요 없이 받은 영상을 `<video id="receiveVideo">`에 표시하기만 하면 됩니다. 실시간 피드백 문구·성공 횟수는 `RTCDataChannel`로 별도 전송해(`broadcastFeedback()` → `renderFeedback()`에서 호출) PC 쪽의 `#receiveDistanceMessage`/`#receiveDistanceCount`에 원거리 모드와 같은 스타일로 표시합니다(`handleReceivedFeedback()`).
+
+받는 쪽 화면도 연습 화면과 같은 방식(`layoutReceiveStage()`)으로 실제 들어오는 영상 비율에 맞춰 letterbox 없이 크기를 계산합니다.
+
+### 사용한 외부 라이브러리
+
+- `jsqr@1.4.0`(jsDelivr) — 스마트폰이 PC 화면의 QR코드를 스캔·디코딩
+- `qrious@4.0.2`(jsDelivr) — PC가 offer를 QR코드로 인코딩. (처음에는 `qrcodejs@1.0.0`을 썼으나 데이터가 조금만 커도 내부 용량 계산 오류로 조용히 실패하는 문제가 있어 `qrious`로 교체했습니다.)
+
+### 알려진 한계
+
+- 같은 와이파이(같은 로컷 네트워크)에 두 기기가 있어야 합니다. ICE 후보 탐색에 구글의 공개 STUN 서버(`stun:stun.l.google.com:19302`)를 쓰지만 TURN 릴레이 서버는 두지 않았으므로, 학교 와이파이가 기기 간 통신을 막아둔 경우(AP/클라이언트 격리)나 대칭형 NAT 환경에서는 연결이 실패할 수 있고 이 앱만으로는 우회할 방법이 없습니다.
+- 응답(answer) 코드를 스마트폰에서 PC로 옮기는 과정은 사람이 직접 복사해야 합니다. 코드 길이가 2000자를 넘어 손으로 타이핑하기엔 비현실적이므로, 사용자가 평소 쓰는 기기 간 텍스트 전달 방법(메신저, 이메일 등)에 의존합니다. 완전 자동화하려면 결국 서버(시그널링)가 필요해, 이번 "서버 없음" 요구사항과 상충합니다.
+- 연결 도중 와이파이가 바뀌거나 끊기면 재협상 로직이 없어 다시 처음부터(QR 재생성부터) 연결해야 합니다.
+- 코덱을 VP8 하나로 제한했기 때문에, VP8을 지원하지 않는 아주 오래된 브라우저에서는 영상 트랙 협상이 실패할 수 있습니다(최신 Chrome·Safari·Edge는 모두 VP8을 지원합니다).
+- 이 기능은 두 브라우저 컨텍스트(실제로는 스마트폰·PC 두 기기)를 대상으로 자동화 테스트(오퍼/앤서 교환, ICE 연결, 데이터채널 전달까지)로 검증했지만, 실제 교실 와이파이 환경(다중 AP, 방화벽 정책 등)에서의 안정성은 별도로 확인이 필요합니다.
+
 ## 새 동작 추가 방법
 
 1. `movementSelect`에 새 `<option>`을 추가합니다.
@@ -142,6 +193,7 @@ profiles.newMovement = {
 - 한 번의 동작이 여러 회로 중복 집계되지 않는지 확인
 - 원거리 모드에서 피드백 문구와 성공 횟수가 카메라 화면 위에서 크게 읽히는지 확인
 - 같은 음성 문구가 반복 재생되지 않고, 발화 사이 최소 간격이 지켜지는지 확인
+- PC·교실 화면 연동: QR 생성→스캔→응답 코드 붙여넣기까지 실제 두 기기(또는 실제 네트워크를 통한 두 브라우저)로 연결되는지, 영상과 실시간 피드백이 PC 화면에 표시되는지 확인
 - JavaScript 콘솔에 오류가 없는지 확인
 - `git status`가 깨끗한지 확인한 후 푸시
 - GitHub Pages 배포가 성공하고 서비스 주소가 HTTP 200으로 열리는지 확인

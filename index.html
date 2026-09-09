@@ -6,6 +6,8 @@
   <meta name="theme-color" content="#14532d">
   <title>AI 체육 동작 코치</title>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/pose.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrious@4.0.2/dist/qrious.min.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js" crossorigin="anonymous"></script>
   <style>
     :root {
       color-scheme: light;
@@ -109,6 +111,37 @@
     #guideInstructions { margin: 0 0 10px; padding-left: 20px; color: var(--ink); font-size: .92rem; line-height: 1.6; }
     #guideInstructions li { margin-bottom: 2px; }
 
+    .mode-switch { display: flex; gap: 8px; margin-bottom: 14px; }
+    .mode-tab {
+      flex: 1; min-height: 46px; border-radius: 12px; border: 1px solid #cbd5e1;
+      background: #fff; color: #475569; font-weight: 800;
+    }
+    .mode-tab.active { background: var(--green-700); border-color: var(--green-700); color: #fff; }
+
+    .pairing-card { padding: 14px 16px; margin-bottom: 14px; }
+    .pairing-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+    .pairing-head strong { font-size: 1rem; color: var(--green-900); }
+    #pairingStatus.connected { background: var(--green-100); color: #166534; }
+    .pairing-card p { margin: 8px 0; color: #475569; font-size: .88rem; line-height: 1.5; }
+    .pairing-card > .ghost-button, .pairing-card textarea, .pairing-card button {
+      width: 100%; margin-top: 8px;
+    }
+    .pairing-card textarea {
+      border-radius: 10px; border: 1px solid #cbd5e1; padding: 10px 12px;
+      font-family: monospace; font-size: .72rem; resize: vertical; min-height: 70px;
+    }
+    .pairing-error { margin-top: 8px; color: var(--danger); font-weight: 700; font-size: .86rem; min-height: 1.2em; }
+
+    .qr-container {
+      display: flex; justify-content: center; align-items: center;
+      background: #fff; border-radius: 16px; padding: 16px; margin-bottom: 14px;
+      min-height: 200px;
+    }
+    .qr-container:empty::before {
+      content: '연결 시작을 누르면 QR코드가 여기 표시돼요.';
+      color: var(--muted); font-size: .9rem; text-align: center;
+    }
+
     .stage-frame { display: flex; justify-content: center; }
     .stage {
       position: relative;
@@ -118,7 +151,8 @@
       box-shadow: 0 14px 32px rgba(15, 23, 42, .2);
       max-width: 100%;
     }
-    video { display: none; }
+    #webcam { display: none; }
+    #receiveVideo { display: block; width: 100%; height: 100%; object-fit: contain; background: #000; }
     canvas { display: block; width: 100%; height: 100%; }
     canvas.mirror { transform: scaleX(-1); }
     .stage-message {
@@ -260,6 +294,12 @@
       <p>카메라로 내 움직임을 확인하고 바른 동작을 연습해요.</p>
     </header>
 
+    <div class="mode-switch" role="tablist" aria-label="사용 모드 선택">
+      <button id="modePracticeButton" class="mode-tab active" type="button" role="tab" aria-selected="true">이 기기로 연습</button>
+      <button id="modeReceiveButton" class="mode-tab" type="button" role="tab" aria-selected="false">폰 카메라 받기 (PC·교실용)</button>
+    </div>
+
+    <div id="practiceView">
     <section class="controls" aria-label="동작과 카메라 설정">
       <label>
         연습할 동작
@@ -305,6 +345,21 @@
       <p id="guideDistanceHint">카메라 옆에서 2~3걸음 떨어져 몸 전체가 보이게 서요.</p>
       <ol id="guideInstructions"></ol>
       <button id="speakGuideButton" type="button" class="ghost-button">설명 듣기</button>
+    </section>
+
+    <section class="pairing-card" aria-label="PC·교실 화면으로 전송">
+      <div class="pairing-head">
+        <strong>PC·교실 화면으로 보내기</strong>
+        <span id="pairingStatus" class="badge">연결 안 됨</span>
+      </div>
+      <p>같은 와이파이의 PC에서 "폰 카메라 받기" 화면을 열어두세요. 이 기기에서 카메라를 먼저 시작한 뒤, 아래 버튼을 누르고 PC 화면의 QR코드를 비추면 연결이 시작됩니다.</p>
+      <button id="scanPcButton" type="button" class="ghost-button">PC와 연결하기 (QR 스캔)</button>
+      <div id="pairingAnswerBox" hidden>
+        <p>아래 코드를 복사해서 PC 화면의 입력창에 붙여넣고 "연결 완료"를 눌러주세요. (카카오톡 나에게 보내기, 이메일 등 평소 두 기기 사이에 글자를 옮기는 방법을 사용하세요.)</p>
+        <textarea id="pairingAnswerText" readonly rows="4"></textarea>
+        <button id="copyAnswerButton" type="button" class="ghost-button">코드 복사</button>
+      </div>
+      <button id="disconnectPcButton" type="button" class="ghost-button" hidden>PC 연결 끊기</button>
     </section>
 
     <div class="stage-frame">
@@ -358,6 +413,54 @@
       <div>이 결과는 화면 속 관절 위치를 이용한 수업 보조 정보이며 전문적인 운동·의료 진단이 아닙니다. 통증이 있으면 즉시 멈추고 선생님에게 알려주세요.</div>
       <div class="privacy">영상은 녹화하거나 서버에 저장하지 않고 현재 브라우저에서만 분석합니다.</div>
     </aside>
+    </div>
+
+    <div id="receiveView" hidden>
+      <section class="controls" aria-label="폰 카메라 받기 설정">
+        <button id="startReceiveButton" type="button">연결 시작 (QR 만들기)</button>
+        <button id="resetReceiveButton" type="button" class="ghost-button" hidden>연결 초기화</button>
+      </section>
+
+      <section class="guide-card" aria-label="연결 방법">
+        <div class="guide-card-head">
+          <strong>스마트폰과 연결하는 방법</strong>
+        </div>
+        <ol>
+          <li>아래 "연결 시작"을 누르면 QR코드가 생겨요.</li>
+          <li>스마트폰에서 이 앱을 열고 카메라를 먼저 시작한 뒤, "PC와 연결하기" 버튼을 누르고 이 화면의 QR코드를 비춰주세요.</li>
+          <li>스마트폰에 뜨는 코드를 복사해서 아래 입력창에 붙여넣고 "연결 완료"를 눌러주세요.</li>
+        </ol>
+      </section>
+
+      <div id="qrContainer" class="qr-container"></div>
+
+      <section class="pairing-card" id="answerInputCard" aria-label="스마트폰 코드 입력" hidden>
+        <p>스마트폰에서 복사한 코드를 여기에 붙여넣으세요.</p>
+        <textarea id="answerInput" rows="4" placeholder="스마트폰에 뜬 코드를 여기에 붙여넣으세요"></textarea>
+        <button id="completeConnectionButton" type="button">연결 완료</button>
+        <div id="receivePairingError" class="pairing-error" role="status"></div>
+      </section>
+
+      <div class="stage-frame" id="receiveStageFrame">
+        <section class="stage" id="receiveStage" aria-label="스마트폰 카메라 수신 화면">
+          <video id="receiveVideo" autoplay playsinline></video>
+          <div id="receiveMessage" class="stage-message">
+            <strong>대기 중</strong>
+            <span>스마트폰과 연결되면 화면이 여기 표시돼요.</span>
+          </div>
+          <div id="receiveDistanceMessage" class="distance-message" hidden aria-hidden="true">
+            <span id="receiveDistanceIcon" class="distance-icon">ℹ️</span>
+            <span id="receiveDistanceText"></span>
+          </div>
+          <div id="receiveDistanceCount" class="distance-count" hidden aria-hidden="true">0회</div>
+        </section>
+      </div>
+
+      <aside class="notice">
+        <strong>개인정보</strong>
+        <div>스마트폰 영상은 같은 와이파이 안에서 이 PC 화면으로 직접(P2P) 전송되며, 별도 서버에 저장되거나 업로드되지 않습니다.</div>
+      </aside>
+    </div>
   </main>
 
   <script>
@@ -387,6 +490,34 @@
     const guideDistanceHint = document.getElementById('guideDistanceHint');
     const guideInstructions = document.getElementById('guideInstructions');
     const dashboard = document.querySelector('.dashboard');
+
+    const modePracticeButton = document.getElementById('modePracticeButton');
+    const modeReceiveButton = document.getElementById('modeReceiveButton');
+    const practiceView = document.getElementById('practiceView');
+    const receiveView = document.getElementById('receiveView');
+
+    const pairingStatus = document.getElementById('pairingStatus');
+    const scanPcButton = document.getElementById('scanPcButton');
+    const pairingAnswerBox = document.getElementById('pairingAnswerBox');
+    const pairingAnswerText = document.getElementById('pairingAnswerText');
+    const copyAnswerButton = document.getElementById('copyAnswerButton');
+    const disconnectPcButton = document.getElementById('disconnectPcButton');
+
+    const startReceiveButton = document.getElementById('startReceiveButton');
+    const resetReceiveButton = document.getElementById('resetReceiveButton');
+    const qrContainer = document.getElementById('qrContainer');
+    const answerInputCard = document.getElementById('answerInputCard');
+    const answerInput = document.getElementById('answerInput');
+    const completeConnectionButton = document.getElementById('completeConnectionButton');
+    const receivePairingError = document.getElementById('receivePairingError');
+    const receiveVideo = document.getElementById('receiveVideo');
+    const receiveStage = document.getElementById('receiveStage');
+    const receiveStageFrame = document.getElementById('receiveStageFrame');
+    const receiveMessage = document.getElementById('receiveMessage');
+    const receiveDistanceMessage = document.getElementById('receiveDistanceMessage');
+    const receiveDistanceIcon = document.getElementById('receiveDistanceIcon');
+    const receiveDistanceText = document.getElementById('receiveDistanceText');
+    const receiveDistanceCount = document.getElementById('receiveDistanceCount');
 
     const countdownOverlay = document.getElementById('countdownOverlay');
     const countdownMovement = document.getElementById('countdownMovement');
@@ -482,6 +613,7 @@
       distanceText.textContent = message;
       distanceMessageEl.className = 'distance-message' + (type ? ' ' + type : '');
       distanceIcon.textContent = type === 'success' ? '✅' : (type === 'warning' || type === 'error') ? '⚠️' : 'ℹ️';
+      broadcastFeedback(message, type);
     }
 
     function requestFeedback(key, message, type, priority, opts = {}) {
@@ -996,6 +1128,8 @@
 
     async function stopEverything() {
       clearCountdownTimers();
+      stopPcScan();
+      disconnectFromPc();
       if (rafId) cancelAnimationFrame(rafId);
       rafId = null;
       currentStream?.getTracks().forEach(track => track.stop());
@@ -1171,16 +1305,335 @@
       announce(speakGuideButton, `${profile.guide} ${profile.instructions.join(' ')}`);
     });
 
-    window.addEventListener('resize', layoutStage);
-    window.addEventListener('orientationchange', () => setTimeout(layoutStage, 300));
+    // --- PC·교실 화면 연동 (WebRTC, 서버 없음) ---
+    // 스마트폰(보내는 쪽)이 QR코드로 PC(받는 쪽)의 연결 요청(offer)을 스캔해서
+    // 읽고, 응답(answer) 코드를 사람이 직접 복사해 PC에 붙여넣는 방식으로
+    // 시그널링 서버 없이 두 기기를 연결한다. 영상 자체는 두 기기 사이에
+    // 직접(P2P) 전달되며 어느 서버도 거치지 않는다.
+    const RTC_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+
+    // QR코드는 물리적으로 약 3000바이트가 한계라, 브라우저가 기본으로
+    // 제안하는 모든 코덱(VP8/VP9/H264 각 프로필/AV1/rtx/fec...)을 그대로
+    // 담으면 SDP가 QR 용량을 넘어버린다. 코덱을 VP8 하나로 제한해 SDP
+    // 크기를 크게 줄인다(재협상 없이 QR 한 장 + 코드 한 번 붙여넣기로
+    // 끝내기 위함).
+    function restrictToVp8(pc) {
+      if (typeof RTCRtpSender === 'undefined' || !RTCRtpSender.getCapabilities) return;
+      try {
+        const capabilities = RTCRtpSender.getCapabilities('video');
+        if (!capabilities) return;
+        const preferred = capabilities.codecs.filter(c => /VP8|rtx/i.test(c.mimeType));
+        if (preferred.length === 0) return;
+        pc.getTransceivers().forEach(transceiver => {
+          if (transceiver.receiver?.track?.kind === 'video' || transceiver.sender?.track?.kind === 'video') {
+            try { transceiver.setCodecPreferences(preferred); } catch (error) { /* 지원 안 하면 무시 */ }
+          }
+        });
+      } catch (error) { /* 지원하지 않는 브라우저는 기본 코덱으로 계속 진행 */ }
+    }
+
+    function waitForIceGatheringComplete(pc) {
+      if (pc.iceGatheringState === 'complete') return Promise.resolve();
+      return new Promise(resolve => {
+        function check() {
+          if (pc.iceGatheringState === 'complete') {
+            pc.removeEventListener('icegatheringstatechange', check);
+            resolve();
+          }
+        }
+        pc.addEventListener('icegatheringstatechange', check);
+      });
+    }
+
+    function setMode(mode) {
+      const isPractice = mode === 'practice';
+      practiceView.hidden = !isPractice;
+      receiveView.hidden = isPractice;
+      modePracticeButton.classList.toggle('active', isPractice);
+      modeReceiveButton.classList.toggle('active', !isPractice);
+      modePracticeButton.setAttribute('aria-selected', String(isPractice));
+      modeReceiveButton.setAttribute('aria-selected', String(!isPractice));
+    }
+    modePracticeButton.addEventListener('click', () => setMode('practice'));
+    modeReceiveButton.addEventListener('click', () => setMode('receive'));
+
+    // 보내는 쪽(스마트폰) 상태
+    const pairing = {
+      pc: null,
+      channel: null,
+      scanning: false,
+      scanCanvas: document.createElement('canvas')
+    };
+    const pairingScanCtx = pairing.scanCanvas.getContext('2d', { willReadFrequently: true });
+
+    function broadcastFeedback(message, type) {
+      if (!pairing.channel || pairing.channel.readyState !== 'open') return;
+      try {
+        pairing.channel.send(JSON.stringify({ message, type, count }));
+      } catch (error) { /* 연결이 끊긴 경우 조용히 무시 */ }
+    }
+
+    function setPairingStatus(text, connected) {
+      pairingStatus.textContent = text;
+      pairingStatus.classList.toggle('connected', !!connected);
+    }
+
+    function startPcScan() {
+      if (typeof RTCPeerConnection === 'undefined' || typeof jsQR === 'undefined') {
+        requestFeedback('pairing-unsupported', '이 브라우저에서는 PC 연결 기능을 지원하지 않아요.', 'warning', PRIORITY.WARNING);
+        return;
+      }
+      if (appState === 'idle') {
+        requestFeedback('pairing-need-camera', '먼저 카메라를 시작한 뒤 PC와 연결해 주세요.', 'warning', PRIORITY.WARNING);
+        return;
+      }
+      if (pairing.scanning || pairing.pc) return;
+      pairing.scanning = true;
+      scanPcButton.disabled = true;
+      scanPcButton.textContent = 'QR 찾는 중…';
+      setPairingStatus('QR 찾는 중…', false);
+      requestAnimationFrame(scanForOfferQr);
+    }
+
+    function stopPcScan() {
+      pairing.scanning = false;
+      scanPcButton.disabled = false;
+      scanPcButton.textContent = 'PC와 연결하기 (QR 스캔)';
+    }
+
+    function scanForOfferQr() {
+      if (!pairing.scanning) return;
+      if (video.readyState >= 2 && video.videoWidth) {
+        const w = 300;
+        const h = Math.max(1, Math.round(w * video.videoHeight / video.videoWidth));
+        pairing.scanCanvas.width = w;
+        pairing.scanCanvas.height = h;
+        pairingScanCtx.drawImage(video, 0, 0, w, h);
+        try {
+          const imageData = pairingScanCtx.getImageData(0, 0, w, h);
+          const code = jsQR(imageData.data, w, h);
+          if (code && code.data) {
+            stopPcScan();
+            connectToPc(code.data);
+            return;
+          }
+        } catch (error) { /* 한 프레임 실패는 무시하고 계속 스캔 */ }
+      }
+      requestAnimationFrame(scanForOfferQr);
+    }
+
+    async function connectToPc(payloadText) {
+      let offer;
+      try {
+        offer = JSON.parse(payloadText);
+      } catch (error) {
+        requestFeedback('pairing-bad-qr', '올바른 연결 코드가 아니에요. 다시 시도해 주세요.', 'warning', PRIORITY.WARNING);
+        return;
+      }
+      setPairingStatus('연결 중…', false);
+      try {
+        const pc = new RTCPeerConnection(RTC_CONFIG);
+        pairing.pc = pc;
+        const canvasStream = canvas.captureStream(24);
+        canvasStream.getVideoTracks().forEach(track => pc.addTrack(track, canvasStream));
+        pc.ondatachannel = (event) => { pairing.channel = event.channel; };
+        pc.onconnectionstatechange = () => {
+          if (!pairing.pc || pc !== pairing.pc) return;
+          if (pc.connectionState === 'connected') setPairingStatus('연결됨', true);
+          else if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) setPairingStatus('연결 끊김', false);
+        };
+        await pc.setRemoteDescription(offer);
+        restrictToVp8(pc);
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        await waitForIceGatheringComplete(pc);
+        pairingAnswerText.value = JSON.stringify({ type: pc.localDescription.type, sdp: pc.localDescription.sdp });
+        pairingAnswerBox.hidden = false;
+        disconnectPcButton.hidden = false;
+        scanPcButton.hidden = true;
+      } catch (error) {
+        console.error('PC 연결 중 오류:', error);
+        requestFeedback('pairing-error', 'PC 연결 중 오류가 발생했어요. 다시 시도해 주세요.', 'warning', PRIORITY.WARNING);
+        disconnectFromPc();
+      }
+    }
+
+    function disconnectFromPc() {
+      if (pairing.pc) {
+        try { pairing.pc.close(); } catch (error) { /* 무시 */ }
+      }
+      pairing.pc = null;
+      pairing.channel = null;
+      pairingAnswerBox.hidden = true;
+      pairingAnswerText.value = '';
+      disconnectPcButton.hidden = true;
+      scanPcButton.hidden = false;
+      setPairingStatus('연결 안 됨', false);
+    }
+
+    scanPcButton.addEventListener('click', startPcScan);
+    disconnectPcButton.addEventListener('click', disconnectFromPc);
+    copyAnswerButton.addEventListener('click', async () => {
+      const original = copyAnswerButton.textContent;
+      try {
+        await navigator.clipboard.writeText(pairingAnswerText.value);
+        copyAnswerButton.textContent = '복사됨!';
+      } catch (error) {
+        pairingAnswerText.select();
+        copyAnswerButton.textContent = '직접 선택해 복사하세요';
+      }
+      setTimeout(() => { copyAnswerButton.textContent = original; }, 1500);
+    });
+
+    // 받는 쪽(PC·교실 화면) 상태
+    const receiving = { pc: null, channel: null };
+
+    function setReceiveMessage(title, sub) {
+      receiveMessage.querySelector('strong').textContent = title;
+      receiveMessage.querySelector('span').textContent = sub || '';
+    }
+
+    // 수신 화면도 실제 들어오는 영상 비율에 맞춰 letterbox 없이 크기를 잡는다
+    // (연습 화면의 layoutStage()와 같은 방식). object-fit:contain으로 표시하므로
+    // 왜곡 없이 전체 몸이 보인다.
+    function layoutReceiveStage() {
+      const hostWidth = receiveStageFrame.clientWidth || window.innerWidth;
+      const maxWidth = Math.min(hostWidth, 920);
+      const viewportHeight = window.innerHeight || 800;
+      const maxHeight = Math.min(viewportHeight * 0.68, 760);
+      const aspect = (receiveVideo.videoWidth && receiveVideo.videoHeight)
+        ? receiveVideo.videoWidth / receiveVideo.videoHeight
+        : 4 / 3;
+      let width = maxWidth;
+      let height = width / aspect;
+      if (height > maxHeight) {
+        height = maxHeight;
+        width = height * aspect;
+      }
+      width = Math.max(width, 220);
+      height = Math.max(height, 165);
+      receiveStage.style.width = `${width}px`;
+      receiveStage.style.height = `${height}px`;
+    }
+    receiveVideo.addEventListener('loadedmetadata', layoutReceiveStage);
+
+    async function startReceive() {
+      if (typeof RTCPeerConnection === 'undefined' || typeof QRious === 'undefined') {
+        receivePairingError.textContent = '이 브라우저에서는 PC 연결 기능을 지원하지 않아요.';
+        return;
+      }
+      if (receiving.pc) return;
+      startReceiveButton.disabled = true;
+      receivePairingError.textContent = '';
+      qrContainer.innerHTML = '';
+      try {
+        const pc = new RTCPeerConnection(RTC_CONFIG);
+        receiving.pc = pc;
+        pc.addTransceiver('video', { direction: 'recvonly' });
+        const channel = pc.createDataChannel('feedback');
+        channel.onmessage = (event) => {
+          try { handleReceivedFeedback(JSON.parse(event.data)); } catch (error) { /* 무시 */ }
+        };
+        receiving.channel = channel;
+        pc.ontrack = (event) => {
+          receiveVideo.srcObject = event.streams[0];
+          receiveMessage.hidden = true;
+        };
+        pc.onconnectionstatechange = () => {
+          if (!receiving.pc || pc !== receiving.pc) return;
+          if (pc.connectionState === 'connected') {
+            setReceiveMessage('연결됨');
+          } else if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) {
+            receiveMessage.hidden = false;
+            setReceiveMessage('연결이 끊겼어요', '스마트폰과 다시 연결해 주세요.');
+          }
+        };
+        restrictToVp8(pc);
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        await waitForIceGatheringComplete(pc);
+        const payload = JSON.stringify({ type: pc.localDescription.type, sdp: pc.localDescription.sdp });
+        const qrCanvas = document.createElement('canvas');
+        qrContainer.appendChild(qrCanvas);
+        new QRious({ element: qrCanvas, value: payload, size: 260, level: 'L' });
+        answerInputCard.hidden = false;
+        resetReceiveButton.hidden = false;
+      } catch (error) {
+        console.error('수신 연결 준비 중 오류:', error);
+        receivePairingError.textContent = '연결 준비 중 오류가 발생했어요. 다시 시도해 주세요.';
+      } finally {
+        startReceiveButton.disabled = false;
+      }
+    }
+
+    async function completeReceiveConnection() {
+      if (!receiving.pc) return;
+      receivePairingError.textContent = '';
+      let answer;
+      try {
+        answer = JSON.parse(answerInput.value.trim());
+      } catch (error) {
+        receivePairingError.textContent = '코드를 다시 확인해 주세요. 스마트폰 화면의 코드를 정확히 복사했는지 확인해 보세요.';
+        return;
+      }
+      try {
+        await receiving.pc.setRemoteDescription(answer);
+        setReceiveMessage('연결 중…', '스마트폰 화면을 기다리고 있어요.');
+      } catch (error) {
+        console.error(error);
+        receivePairingError.textContent = '연결에 실패했어요. 코드를 다시 확인하거나 새로고침 후 다시 시도해 주세요.';
+      }
+    }
+
+    function resetReceive() {
+      if (receiving.pc) {
+        try { receiving.pc.close(); } catch (error) { /* 무시 */ }
+      }
+      receiving.pc = null;
+      receiving.channel = null;
+      qrContainer.innerHTML = '';
+      answerInputCard.hidden = true;
+      answerInput.value = '';
+      receivePairingError.textContent = '';
+      resetReceiveButton.hidden = true;
+      receiveVideo.srcObject = null;
+      receiveMessage.hidden = false;
+      setReceiveMessage('대기 중', '스마트폰과 연결되면 화면이 여기 표시돼요.');
+      receiveDistanceMessage.hidden = true;
+      receiveDistanceCount.hidden = true;
+      layoutReceiveStage();
+    }
+
+    function handleReceivedFeedback(data) {
+      const { message, type, count: remoteCount } = data;
+      if (typeof message !== 'string') return;
+      receiveDistanceMessage.hidden = false;
+      receiveDistanceText.textContent = message;
+      receiveDistanceMessage.className = 'distance-message' + (type ? ' ' + type : '');
+      receiveDistanceIcon.textContent = type === 'success' ? '✅' : (type === 'warning' || type === 'error') ? '⚠️' : 'ℹ️';
+      if (typeof remoteCount === 'number') {
+        receiveDistanceCount.hidden = false;
+        receiveDistanceCount.textContent = `${remoteCount}회`;
+      }
+    }
+
+    startReceiveButton.addEventListener('click', startReceive);
+    resetReceiveButton.addEventListener('click', resetReceive);
+    completeConnectionButton.addEventListener('click', completeReceiveConnection);
+
+    window.addEventListener('resize', () => { layoutStage(); layoutReceiveStage(); });
+    window.addEventListener('orientationchange', () => setTimeout(() => { layoutStage(); layoutReceiveStage(); }, 300));
     window.addEventListener('pagehide', () => {
       currentStream?.getTracks().forEach(track => track.stop());
+      try { pairing.pc?.close(); } catch (error) { /* 무시 */ }
+      try { receiving.pc?.close(); } catch (error) { /* 무시 */ }
     });
 
     updateDashboardLabels();
     updateGuideCard();
     resetRepState();
     layoutStage();
+    layoutReceiveStage();
 
     if ('speechSynthesis' in window) {
       refreshVoices();
