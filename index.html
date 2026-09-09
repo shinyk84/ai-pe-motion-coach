@@ -512,8 +512,8 @@
     }
 
     // 브라우저에 등록된 한국어 음성이 있으면 명시적으로 골라 준다.
-    // 음성을 지정하지 않으면 일부 브라우저는 lang만으로 맞는 음성을 못 찾아
-    // 아무 소리도 내지 않고 조용히 실패한다.
+    // 음성을 지정하지 않으면 일부 브라우저(특히 안드로이드 Chrome)는 lang만으로
+    // 맞는 음성을 못 찾을 때 아무 소리도 내지 않고 조용히 실패한다.
     let cachedVoices = [];
     function refreshVoices() {
       if (!('speechSynthesis' in window)) return;
@@ -522,25 +522,55 @@
     function pickKoreanVoice() {
       return cachedVoices.find(v => v.lang && v.lang.toLowerCase().startsWith('ko')) || null;
     }
+    // 한국어 음성이 전혀 설치되어 있지 않은 기기(주로 안드로이드에서 시스템
+    // 텍스트 음성 변환 엔진에 한국어 팩이 없는 경우)라도, 완전한 무음보다는
+    // 설치된 다른 음성으로라도 소리가 나는 편이 사용자가 클릭이 실제로
+    // 동작했는지 확인하는 데 도움이 된다.
+    function pickFallbackVoice() {
+      return pickKoreanVoice() || cachedVoices[0] || null;
+    }
+
+    function reportSpeechUnavailable() {
+      requestFeedback(
+        'tts-unavailable',
+        '이 기기에서 음성이 재생되지 않아요. 기기 설정에서 "텍스트 음성 변환"의 한국어 음성을 설치해 보세요.',
+        'warning', PRIORITY.WARNING, { speak: false }
+      );
+    }
 
     // 실제 발화 실행. iOS Safari 등 모바일 브라우저는 사용자 탭(gesture)과
     // 동기적으로 이어지지 않는 speak() 호출은 조용히 무시하므로,
     // setTimeout 등으로 지연하지 않고 항상 같은 실행 흐름에서 바로 호출한다.
-    function speakUtterance(text) {
-      if (!('speechSynthesis' in window)) return false;
+    // opts.reportFailure가 true면(설정 화면의 "음성 시험"/"설명 듣기" 버튼처럼
+    // 명시적으로 소리를 확인하려는 시도) 실제로 발화가 시작되는지까지 확인해
+    // 실패 시 원인을 화면에 안내한다.
+    function speakUtterance(text, opts = {}) {
+      if (!('speechSynthesis' in window)) {
+        if (opts.reportFailure) reportSpeechUnavailable();
+        return false;
+      }
       const synth = window.speechSynthesis;
       try {
         const utterance = new SpeechSynthesisUtterance(text);
         utterance.lang = 'ko-KR';
         utterance.rate = 1.03;
-        const koreanVoice = pickKoreanVoice();
-        if (koreanVoice) {
-          try { utterance.voice = koreanVoice; } catch (voiceError) { /* 음성 지정 실패 시 기본 음성으로 계속 진행 */ }
+        const voice = pickFallbackVoice();
+        if (voice) {
+          try { utterance.voice = voice; } catch (voiceError) { /* 음성 지정 실패 시 기본 음성으로 계속 진행 */ }
+        }
+        if (opts.reportFailure) {
+          let started = false;
+          utterance.onstart = () => { started = true; };
+          utterance.onerror = () => reportSpeechUnavailable();
+          setTimeout(() => {
+            if (!started && !synth.speaking && !synth.pending) reportSpeechUnavailable();
+          }, 1500);
         }
         if (synth.speaking || synth.pending) synth.cancel();
         synth.speak(utterance);
       } catch (error) {
         console.error('음성 안내 재생 중 오류:', error);
+        if (opts.reportFailure) reportSpeechUnavailable();
       }
       return true;
     }
@@ -576,10 +606,10 @@
 
     // 설정 화면의 "음성 시험"/"설명 듣기" 버튼처럼 사용자가 직접 요청한 발화는
     // 음성 안내 on/off나 발화 간격 제한과 무관하게 즉시 들려준다.
-    function speakRaw(text) {
+    function speakRaw(text, opts = {}) {
       feedbackState.lastSpokenMessage = text;
       feedbackState.lastSpokenAt = Date.now();
-      return speakUtterance(text);
+      return speakUtterance(text, opts);
     }
 
     // 카운트다운 전용 발화. 마지막 3초는 1초 간격으로 말해야 하므로
@@ -1122,18 +1152,14 @@
     // 버튼을 눌렀을 때 실제 소리가 나든 안 나든 클릭이 처리됐다는 것을
     // 화면에서 바로 확인할 수 있도록 버튼 문구를 잠시 바꿔 보여준다.
     function announce(button, text) {
-      if (!('speechSynthesis' in window)) {
-        renderFeedback('이 브라우저는 음성 안내를 지원하지 않아요.', 'warning');
-        return;
-      }
       const original = button.textContent;
       button.disabled = true;
       button.textContent = '재생 중…';
-      speakRaw(text);
+      speakRaw(text, { reportFailure: true });
       setTimeout(() => {
         button.disabled = false;
         button.textContent = original;
-      }, 1200);
+      }, 1700);
     }
 
     voiceTestButton.addEventListener('click', () => {
