@@ -1646,7 +1646,12 @@
         const payload = JSON.stringify({ type: pc.localDescription.type, sdp: shrinkSdpForQr(pc.localDescription.sdp) });
         const qrCanvas = document.createElement('canvas');
         qrContainer.appendChild(qrCanvas);
-        new QRious({ element: qrCanvas, value: payload, size: 320, level: 'L' });
+        // level 'L'(7% 오류 복원)은 데이터가 클 때 용량을 최대한 늘리려고 썼던
+        // 설정인데, 화면을 폰 카메라로 찍어 스캔하는 방식은 화면 반사·무아레·
+        // 초점 흔들림에 약해서 복원율이 낮으면 스캔 실패가 잦다. 이제 코덱·헤더
+        // 확장·후보를 줄여 데이터가 충분히 작아졌으니(1~2천 바이트대) 복원율을
+        // 'Q'(약 25%)로 올려 다소 큰 대신 훨씬 안정적으로 스캔되게 한다.
+        new QRious({ element: qrCanvas, value: payload, size: 400, level: 'Q' });
         offerText.value = payload;
         offerTextCard.hidden = false;
         answerInputCard.hidden = false;
