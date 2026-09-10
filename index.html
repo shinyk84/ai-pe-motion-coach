@@ -354,6 +354,12 @@
       </div>
       <p>같은 와이파이의 PC에서 "폰 카메라 받기" 화면을 열어두세요. 이 기기에서 카메라를 먼저 시작한 뒤, 아래 버튼을 누르고 PC 화면의 QR코드를 비추면 연결이 시작됩니다.</p>
       <button id="scanPcButton" type="button" class="ghost-button">PC와 연결하기 (QR 스캔)</button>
+      <button id="togglePasteOfferButton" type="button" class="ghost-button">QR 대신 코드 붙여넣기</button>
+      <div id="pasteOfferBox" hidden>
+        <p>PC 화면의 "QR이 잘 안 찍히면" 코드를 복사해서 아래에 붙여넣어 주세요.</p>
+        <textarea id="pasteOfferInput" rows="4" placeholder="PC 화면의 코드를 여기에 붙여넣으세요"></textarea>
+        <button id="submitPasteOfferButton" type="button" class="ghost-button">코드로 연결하기</button>
+      </div>
       <div id="pairingAnswerBox" hidden>
         <p>아래 코드를 복사해서 PC 화면의 입력창에 붙여넣고 "연결 완료"를 눌러주세요. (카카오톡 나에게 보내기, 이메일 등 평소 두 기기 사이에 글자를 옮기는 방법을 사용하세요.)</p>
         <textarea id="pairingAnswerText" readonly rows="4"></textarea>
@@ -434,6 +440,12 @@
 
       <div id="qrContainer" class="qr-container"></div>
 
+      <section class="pairing-card" id="offerTextCard" aria-label="QR 대신 코드로 연결" hidden>
+        <p>QR이 잘 안 찍히면, 아래 코드를 복사해서 스마트폰의 "QR 대신 코드 붙여넣기"에 붙여넣어 주세요.</p>
+        <textarea id="offerText" readonly rows="4"></textarea>
+        <button id="copyOfferButton" type="button" class="ghost-button">코드 복사</button>
+      </section>
+
       <section class="pairing-card" id="answerInputCard" aria-label="스마트폰 코드 입력" hidden>
         <p>스마트폰에서 복사한 코드를 여기에 붙여넣으세요.</p>
         <textarea id="answerInput" rows="4" placeholder="스마트폰에 뜬 코드를 여기에 붙여넣으세요"></textarea>
@@ -498,6 +510,10 @@
 
     const pairingStatus = document.getElementById('pairingStatus');
     const scanPcButton = document.getElementById('scanPcButton');
+    const togglePasteOfferButton = document.getElementById('togglePasteOfferButton');
+    const pasteOfferBox = document.getElementById('pasteOfferBox');
+    const pasteOfferInput = document.getElementById('pasteOfferInput');
+    const submitPasteOfferButton = document.getElementById('submitPasteOfferButton');
     const pairingAnswerBox = document.getElementById('pairingAnswerBox');
     const pairingAnswerText = document.getElementById('pairingAnswerText');
     const copyAnswerButton = document.getElementById('copyAnswerButton');
@@ -506,6 +522,9 @@
     const startReceiveButton = document.getElementById('startReceiveButton');
     const resetReceiveButton = document.getElementById('resetReceiveButton');
     const qrContainer = document.getElementById('qrContainer');
+    const offerTextCard = document.getElementById('offerTextCard');
+    const offerText = document.getElementById('offerText');
+    const copyOfferButton = document.getElementById('copyOfferButton');
     const answerInputCard = document.getElementById('answerInputCard');
     const answerInput = document.getElementById('answerInput');
     const completeConnectionButton = document.getElementById('completeConnectionButton');
@@ -1332,6 +1351,16 @@
       } catch (error) { /* 지원하지 않는 브라우저는 기본 코덱으로 계속 진행 */ }
     }
 
+    // TCP ICE candidate(호스트/서버반사 각각 active·passive·so 변형)는 같은 와이파이
+    // P2P 연결에는 거의 쓰이지 않으면서 SDP 길이를 크게 늘린다. QR코드 한 장에
+    // 담을 수 있는 용량(약 3000바이트)을 넘기지 않도록 제거한다.
+    function stripTcpCandidates(sdp) {
+      return sdp
+        .split('\r\n')
+        .filter(line => !(line.startsWith('a=candidate') && / tcp /.test(line)))
+        .join('\r\n');
+    }
+
     function waitForIceGatheringComplete(pc) {
       if (pc.iceGatheringState === 'complete') return Promise.resolve();
       return new Promise(resolve => {
@@ -1447,7 +1476,7 @@
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         await waitForIceGatheringComplete(pc);
-        pairingAnswerText.value = JSON.stringify({ type: pc.localDescription.type, sdp: pc.localDescription.sdp });
+        pairingAnswerText.value = JSON.stringify({ type: pc.localDescription.type, sdp: stripTcpCandidates(pc.localDescription.sdp) });
         pairingAnswerBox.hidden = false;
         disconnectPcButton.hidden = false;
         scanPcButton.hidden = true;
@@ -1473,6 +1502,19 @@
 
     scanPcButton.addEventListener('click', startPcScan);
     disconnectPcButton.addEventListener('click', disconnectFromPc);
+    togglePasteOfferButton.addEventListener('click', () => {
+      pasteOfferBox.hidden = !pasteOfferBox.hidden;
+    });
+    submitPasteOfferButton.addEventListener('click', () => {
+      if (appState === 'idle') {
+        requestFeedback('pairing-need-camera', '먼저 카메라를 시작한 뒤 PC와 연결해 주세요.', 'warning', PRIORITY.WARNING);
+        return;
+      }
+      const text = pasteOfferInput.value.trim();
+      if (!text) return;
+      pasteOfferBox.hidden = true;
+      connectToPc(text);
+    });
     copyAnswerButton.addEventListener('click', async () => {
       const original = copyAnswerButton.textContent;
       try {
@@ -1552,10 +1594,12 @@
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         await waitForIceGatheringComplete(pc);
-        const payload = JSON.stringify({ type: pc.localDescription.type, sdp: pc.localDescription.sdp });
+        const payload = JSON.stringify({ type: pc.localDescription.type, sdp: stripTcpCandidates(pc.localDescription.sdp) });
         const qrCanvas = document.createElement('canvas');
         qrContainer.appendChild(qrCanvas);
-        new QRious({ element: qrCanvas, value: payload, size: 260, level: 'L' });
+        new QRious({ element: qrCanvas, value: payload, size: 320, level: 'L' });
+        offerText.value = payload;
+        offerTextCard.hidden = false;
         answerInputCard.hidden = false;
         resetReceiveButton.hidden = false;
       } catch (error) {
@@ -1592,6 +1636,8 @@
       receiving.pc = null;
       receiving.channel = null;
       qrContainer.innerHTML = '';
+      offerTextCard.hidden = true;
+      offerText.value = '';
       answerInputCard.hidden = true;
       answerInput.value = '';
       receivePairingError.textContent = '';
@@ -1620,6 +1666,17 @@
     startReceiveButton.addEventListener('click', startReceive);
     resetReceiveButton.addEventListener('click', resetReceive);
     completeConnectionButton.addEventListener('click', completeReceiveConnection);
+    copyOfferButton.addEventListener('click', async () => {
+      const original = copyOfferButton.textContent;
+      try {
+        await navigator.clipboard.writeText(offerText.value);
+        copyOfferButton.textContent = '복사됨!';
+      } catch (error) {
+        offerText.select();
+        copyOfferButton.textContent = '직접 선택해 복사하세요';
+      }
+      setTimeout(() => { copyOfferButton.textContent = original; }, 1500);
+    });
 
     window.addEventListener('resize', () => { layoutStage(); layoutReceiveStage(); });
     window.addEventListener('orientationchange', () => setTimeout(() => { layoutStage(); layoutReceiveStage(); }, 300));
